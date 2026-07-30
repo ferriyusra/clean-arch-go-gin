@@ -4,8 +4,9 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/service/token"
+
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/repository/mock"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/service/token"
 )
 
 func TestNewUserService(t *testing.T) {

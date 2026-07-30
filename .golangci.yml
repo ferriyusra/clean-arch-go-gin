@@ -1,0 +1,62 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck # unchecked errors
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose # unclosed HTTP response bodies
+    - copyloopvar
+    - errorlint # ensures errors.Is/As instead of == and type asserts
+    - gosec # common security mistakes
+    - misspell
+    - nilerr # returning nil when err is non-nil
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - whitespace
+
+  settings:
+    errcheck:
+      # Deliberate fire-and-forget calls, mostly in tests and shutdown paths.
+      exclude-functions:
+        - (*github.com/gin-gonic/gin.Engine).SetTrustedProxies
+    gosec:
+      excludes:
+        # G104 duplicates errcheck.
+        - G104
+    revive:
+      rules:
+        - name: exported
+          disabled: true # doc comments are enforced by review, not the linter
+
+  exclusions:
+    rules:
+      # Tests hard-code credentials and skip error checks on purpose.
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+      # Mocks are generated; do not lint them.
+      - path: internal/repository/mock/
+        linters:
+          - errcheck
+          - gosec
+          - revive
+          - staticcheck
+          - unused
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ferriyusra/boilerplate-golang-gin

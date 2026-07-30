@@ -7,15 +7,15 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/service/token"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/request"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/repository/mock"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/service/token"
 )
 
 func TestLogin(t *testing.T) {
-	// Hash a password for testing
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
 	testUserID := uuid.New()
 
@@ -24,6 +24,7 @@ func TestLogin(t *testing.T) {
 		request            *request.LoginRequest
 		mockFindByEmail    *entity.UserEntity
 		mockFindByEmailErr error
+		mockStoreTokenErr  error
 		expectedError      bool
 		expectedErrorMsg   string
 	}{
@@ -40,6 +41,7 @@ func TestLogin(t *testing.T) {
 				Name:     "Test User",
 			},
 			mockFindByEmailErr: nil,
+			mockStoreTokenErr:  nil,
 			expectedError:      false,
 		},
 		{
@@ -51,7 +53,7 @@ func TestLogin(t *testing.T) {
 			mockFindByEmail:    nil,
 			mockFindByEmailErr: nil,
 			expectedError:      true,
-			expectedErrorMsg:   "invalid email or password",
+			expectedErrorMsg:   ErrInvalidCredentials.Error(),
 		},
 		{
 			name: "should return error when password is wrong",
@@ -67,7 +69,7 @@ func TestLogin(t *testing.T) {
 			},
 			mockFindByEmailErr: nil,
 			expectedError:      true,
-			expectedErrorMsg:   "invalid email or password",
+			expectedErrorMsg:   ErrInvalidCredentials.Error(),
 		},
 		{
 			name: "should return error when repository fails",
@@ -79,6 +81,22 @@ func TestLogin(t *testing.T) {
 			mockFindByEmailErr: errors.New("database error"),
 			expectedError:      true,
 		},
+		{
+			name: "should return error when storing refresh token fails",
+			request: &request.LoginRequest{
+				Email:    "test@example.com",
+				Password: "password123",
+			},
+			mockFindByEmail: &entity.UserEntity{
+				ID:       testUserID,
+				Email:    "test@example.com",
+				Password: hashedPassword,
+				Name:     "Test User",
+			},
+			mockFindByEmailErr: nil,
+			mockStoreTokenErr:  errors.New("token store failed"),
+			expectedError:      true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -86,30 +104,32 @@ func TestLogin(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
-			// Setup mock repositories
 			mockRepo := mock.NewMockUserRepository(ctrl)
 			mockRefreshTokenRepo := mock.NewMockRefreshTokenRepository(ctrl)
 
-			// Setup FindByEmail expectation
 			mockRepo.EXPECT().
 				FindByEmail(gomock.Any(), tt.request.Email).
 				Return(tt.mockFindByEmail, tt.mockFindByEmailErr).
 				Times(1)
 
-			// Setup token service
+			// Token storage is called only on successful credential check
+			if tt.mockFindByEmailErr == nil && tt.mockFindByEmail != nil && tt.expectedErrorMsg != ErrInvalidCredentials.Error() {
+				mockRefreshTokenRepo.EXPECT().
+					Create(gomock.Any(), gomock.Any()).
+					Return(tt.mockStoreTokenErr).
+					Times(1)
+			}
+
 			tokenConfig := token.TokenConfig{
 				AccessTokenSecret:  "test-access-secret",
 				RefreshTokenSecret: "test-refresh-secret",
 			}
 			tokenSvc := token.NewTokenService(tokenConfig)
 
-			// Create service with mocked repositories
 			svc := NewUserService(mockRepo, mockRefreshTokenRepo, tokenSvc)
 
-			// Call the method being tested
 			result, err := svc.Login(context.Background(), tt.request)
 
-			// Assert results
 			if tt.expectedError {
 				if err == nil {
 					t.Errorf("expected error, got nil")
@@ -122,12 +142,16 @@ func TestLogin(t *testing.T) {
 					t.Errorf("unexpected error: %v", err)
 				}
 				if result == nil {
-					t.Errorf("expected non-nil result")
+					t.Fatal("expected non-nil result")
 				}
-				if result != nil {
-					if result.User.Email != tt.request.Email {
-						t.Errorf("expected email %s, got %s", tt.request.Email, result.User.Email)
-					}
+				if result.User.Email != tt.request.Email {
+					t.Errorf("expected email %s, got %s", tt.request.Email, result.User.Email)
+				}
+				if result.AccessToken == "" {
+					t.Error("expected non-empty access token")
+				}
+				if result.RefreshToken == "" {
+					t.Error("expected non-empty refresh token")
 				}
 			}
 		})
@@ -148,7 +172,6 @@ func TestLoginContextCancellation(t *testing.T) {
 
 	svc := NewUserService(mockRepo, mockRefreshTokenRepo, tokenSvc)
 
-	// Create a cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

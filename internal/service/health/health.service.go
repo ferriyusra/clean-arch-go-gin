@@ -3,7 +3,7 @@ package health
 import (
 	"context"
 
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/response"
 )
 
 // HealthService defines the interface for health checks

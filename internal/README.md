@@ -1,716 +1,266 @@
-# Backend - Go Clean Architecture Guide
+# Backend — Go Clean Architecture Guide
 
-A production-ready Go backend built with **Clean Architecture** principles, featuring comprehensive testing, dependency injection, and clear separation of concerns.
+Layer-by-layer developer guide. Setup, commands, API reference, configuration, and
+deployment live in the [root README](../README.md) — this document covers only how the
+layers fit together and how to add code to them.
 
-## 📚 Quick Navigation
+## Quick Navigation
 
-- **Getting Started** → [Jump to Setup](#-getting-started)
-- **Adding Features** → [Development Workflow](#-development-workflow)
-- **Model Layer** → See [`internal/model/README.md`](./model/README.md)
-- **Service Layer** → See [`internal/service/README.md`](./service/README.md)
-- **Repository Layer** → See [`internal/repository/README.md`](./repository/README.md)
+| Guide | Covers |
+|-------|--------|
+| [service/README.md](./service/README.md) | TDD workflow, table-driven tests, mocking repositories |
+| [repository/README.md](./repository/README.md) | GORM implementations, interfaces, mock generation |
+| [model/README.md](./model/README.md) | Entities, request/response DTOs, validation tags |
+| [root README](../README.md) | Setup, commands, API, config, auth, Docker, CI |
 
-## 🏗️ Architecture Overview
+## Architecture
 
-This backend implements **Clean Architecture** with strict layer separation:
+Dependencies point **inward only**. An outer layer may import an inner one; never the
+reverse.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        HTTP Layer (API)                      │
-│  • Handles HTTP requests/responses                          │
-│  • Middleware (auth, CORS, logging)                         │
-│  • Route definitions                                        │
-└─────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────┐
-│                      Service Layer (Business Logic)          │
-│  • Orchestrates operations                                  │
-│  • Business rules and validation                            │
-│  • Uses Request/Response DTOs                               │
-└─────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────┐
-│                   Repository Layer (Data Access)             │
-│  • Interface-based contracts                                │
-│  • GORM implementations                                     │
-│  • Uses Entity models                                       │
-└─────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────┐
-│                          Database                            │
-│  • PostgreSQL (production)                                  │
-│  • SQLite (development)                                     │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  api/          handlers, middleware, routes │  HTTP concerns only
+├─────────────────────────────────────────────┤
+│  service/      business logic               │  depends on repository interfaces
+├─────────────────────────────────────────────┤
+│  repository/   data access (GORM)           │  depends on entities
+├─────────────────────────────────────────────┤
+│  model/        entities and DTOs            │  depends on nothing
+└─────────────────────────────────────────────┘
+
+di/         wires the layers together
+platform/   config, database, migrations, logger
 ```
 
-### Directory Structure
+### Directory structure
 
 ```
 internal/
-├── api/                    # HTTP layer
-│   ├── handler/           # Request handlers
-│   ├── middleware/        # Auth, CORS, etc.
-│   └── router.go          # Route configuration
+├── api/
+│   ├── handler/
+│   │   ├── user.go             Auth endpoints
+│   │   ├── health.go           Liveness + readiness
+│   │   ├── errors.go           Sentinel error → HTTP status mapping
+│   │   └── validation.go       Binding errors → field messages
+│   ├── middleware/
+│   │   ├── auth.go             JWT bearer auth + context helpers
+│   │   ├── request_id.go       X-Request-ID correlation
+│   │   ├── logger.go           slog request logging + panic recovery
+│   │   └── rate_limit.go       Per-IP fixed-window limiter
+│   └── router.go               SetupRoutes(r, RouterDeps{...})
 │
-├── service/               # Business logic layer
-│   ├── user/             # User domain services
-│   ├── counter/          # Counter services
-│   ├── csrf/             # CSRF token services
-│   ├── token/            # JWT token services
-│   └── README.md         # 📖 Service development guide (TDD)
+├── service/
+│   ├── user/                   register, login, refresh, logout, errors.go
+│   ├── token/                  JWT issue/validate + HashToken (no repository)
+│   └── health/                 Check, CheckWithDependencies
 │
-├── repository/           # Data access layer
-│   ├── interfaces/       # Repository contracts
-│   ├── implementations/  # GORM implementations
-│   ├── mock/            # Generated mocks
-│   └── README.md        # 📖 Repository implementation guide
+├── repository/
+│   ├── interfaces/             *.repository_interface.go — the contracts
+│   ├── implementations/        user/, refresh_token/ — GORM, one file per action
+│   └── mock/                   Generated; do not edit
 │
-├── model/                # Data models
-│   ├── entity/          # Database entities
-│   ├── request/         # API request DTOs
-│   ├── response/        # API response DTOs
-│   └── README.md        # 📖 Model structure guide
+├── model/
+│   ├── entity/                 GORM models
+│   ├── request/                Input DTOs with `binding` tags
+│   └── response/               Output DTOs + response envelope
 │
-├── di/                   # Dependency injection
-│   └── container.go     # Wire all dependencies
-│
-└── platform/            # Infrastructure
-    ├── config.go        # Configuration management
-    └── database.go      # Database initialization
+├── di/container.go             Secret validation, logger, DB, wiring
+└── platform/                   config.go, database.go, migrate.go, logger.go
 ```
 
-### Layer Responsibilities
+### Layer responsibilities
 
-| Layer | Purpose | What It Contains | What It Uses |
-|-------|---------|------------------|--------------|
-| **API** | HTTP concerns | Handlers, middleware, routing | Services |
-| **Service** | Business logic | Domain operations, validation | Repositories, Request/Response models |
-| **Repository** | Data access | CRUD operations, queries | Entities, GORM |
-| **Model** | Data structures | Entities, Request/Response DTOs | Nothing (pure data) |
-| **Platform** | Infrastructure | Config, DB connection, external services | GORM, third-party libs |
-| **DI** | Dependency wiring | Container, initialization | All layers |
+| Layer | Does | Must not |
+|-------|------|----------|
+| **handler** | Bind and validate input, call one service, map errors to a status | Contain business logic or touch the database |
+| **middleware** | Cross-cutting HTTP concerns | Contain domain logic |
+| **service** | Business rules, orchestrate repositories, return DTOs | Know about `gin`, HTTP status codes, or SQL |
+| **repository** | Persistence for one entity | Contain business rules |
+| **model** | Describe data shapes | Contain behaviour or dependencies |
+| **di** | Construct and wire everything | Contain logic worth testing on its own |
+| **platform** | Infrastructure setup | Know about domains |
 
-## 🚀 Getting Started
+The `user` domain is the reference implementation — read it end to end before adding
+a new one.
 
-### Prerequisites
+## Adding a Feature
 
-- **Go 1.25.6+** (check with `go version`)
-- **Air** for hot-reload: `go install github.com/air-verse/air@latest`
-- **Make** for build automation
-- **PostgreSQL** (production) or **SQLite** (development, default)
-- **Redis** (optional, for caching)
-
-### Installation
-
-1. **Clone and navigate to project:**
-   ```bash
-   cd clean-go-vite-react
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   make install-deps
-   ```
-
-3. **Set up environment:**
-   ```bash
-   cp env.example .env
-   ```
-
-4. **Configure `.env` file:**
-   ```env
-   # Server
-   SERVER_PORT=8080
-   SERVER_HOST=                    # Empty = localhost
-
-   # Database (SQLite for dev)
-   DATABASE_TYPE=sqlite
-   DATABASE_DSN=dev.db
-
-   # JWT Secrets (CHANGE IN PRODUCTION!)
-   JWT_ACCESS_SECRET=change-me-in-production
-   JWT_REFRESH_SECRET=change-me-in-production
-
-   # Development
-   DEV_MODE=true
-   ```
-
-5. **Run the server:**
-   ```bash
-   make dev          # Frontend + backend with hot-reload
-   # OR
-   make server       # Backend only with hot-reload
-   ```
-
-6. **Verify it's running:**
-   ```bash
-   curl http://localhost:8080/api/health
-   # Expected: {"status":"ok"}
-   ```
-
-## 🔧 Development Workflow
-
-### Adding a New Feature (TDD Workflow)
-
-**Follow this exact order** - it's Test-Driven Development (TDD):
+Follow this order; it is Test-Driven Development.
 
 ```
-1. Create Entity           → See model/README.md
-   └─ Define database schema (ProductEntity)
+1. Entity                     → model/README.md
+   └─ internal/model/entity/product.go
 
-2. Create Repository Interface → See repository/README.md
-   └─ Define contract (ProductRepository)
+2. Register the migration      ← easy to forget
+   └─ Add &entity.ProductEntity{} to migrationModels in platform/migrate.go
 
-3. Generate Mocks
-   └─ Run: make repository-mocks
+3. Repository interface        → repository/README.md
+   └─ internal/repository/interfaces/product.repository_interface.go
 
-4. Implement Repository    → See repository/README.md
-   └─ GORM implementation with real database logic
+4. Generate mocks
+   └─ make repository-mocks
 
-5. Define Request/Response Models → See model/README.md
-   ├─ Create Request DTOs (input structure)
-   └─ Create Response DTOs (output structure)
+5. Repository implementation   → repository/README.md
+   └─ internal/repository/implementations/product/<action>.gorm.go
 
-6. Write Service Tests FIRST → See service/README.md
-   └─ Write failing tests using mocks (TDD!)
+6. Request/response DTOs       → model/README.md
+   └─ Define these before the tests — they are the inputs and outputs you assert on
 
-7. Implement Service       → See service/README.md
-   ├─ Define service interface
-   └─ Implement business logic to pass tests
+7. Service tests FIRST         → service/README.md
+   └─ Failing table-driven tests against the generated mocks
 
-8. Create Handler
-   ├─ Write handler function
-   └─ Add routes to router.go
+8. Service implementation      → service/README.md
+   ├─ internal/service/product/product.service.go   (interface + constructor)
+   ├─ internal/service/product/<action>.service.go  (one file per action)
+   └─ internal/service/product/errors.go            (sentinel errors)
 
-9. Wire Dependencies
-   └─ Update di/container.go
+9. Handler + routes
+   ├─ internal/api/handler/product.go
+   ├─ Map new sentinels in handler/errors.go → serviceErrorStatus
+   └─ Register routes in api/router.go (add the handler to RouterDeps)
+
+10. Wire it up
+    └─ internal/di/container.go: repository → service → handler → router
+
+11. Document it
+    └─ Add the endpoints to docs/openapi.yaml
 ```
 
-**Key Point**: Define Request/Response models (step 5) BEFORE writing tests (step 6) - how else would you know what inputs/outputs to test?
+Steps 2, 9 (the sentinel mapping), and 11 are the ones most often skipped and the
+ones that cause the most confusing breakage later.
 
-### Example: Adding a "Product" Feature (Following TDD)
+### Error handling contract
 
-**Step 1: Create Entity** (See [`model/README.md`](./model/README.md))
+This is the rule most likely to be violated by copy-pasting older Go code.
+
+Services return a **sentinel error** for every *expected* failure and wrap
+*unexpected* ones:
 
 ```go
-// model/entity/product.go
-package entity
+// internal/service/product/errors.go
+var ErrProductNotFound = errors.New("product not found")
 
-import (
-    "time"
-    "github.com/google/uuid"
-    "gorm.io/gorm"
-)
-
-type ProductEntity struct {
-    ID        uuid.UUID      `gorm:"primaryKey"`
-    Name      string         `gorm:"not null"`
-    Price     float64        `gorm:"not null"`
-    CreatedAt time.Time
-    UpdatedAt time.Time
-    DeletedAt gorm.DeletedAt `gorm:"index"`
+// in the service
+if product == nil {
+    return nil, ErrProductNotFound          // expected → sentinel
+}
+if err != nil {
+    return nil, fmt.Errorf("finding product: %w", err)   // unexpected → wrapped
 }
 ```
 
-**Step 2: Create Repository Interface** (See [`repository/README.md`](./repository/README.md))
+Handlers never answer with `err.Error()`:
 
 ```go
-// repository/interfaces/product.repository_interface.go
-package interfaces
-
-import (
-    "context"
-    "github.com/google/uuid"
-    "github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
-)
-
-type ProductRepository interface {
-    Create(ctx context.Context, product entity.ProductEntity) (*uuid.UUID, error)
-    FindByID(ctx context.Context, id uuid.UUID) (*entity.ProductEntity, error)
+resp, err := h.productService.Get(c.Request.Context(), id)
+if err != nil {
+    respondServiceError(c, err)   // sentinel → mapped status; anything else → 500
+    return
 }
 ```
 
-**Step 3: Generate Mocks**
+`respondServiceError` echoes only sentinel messages. Everything else is logged with
+the request ID and answered as a generic `Internal server error`, because a wrapped
+error carries database and driver detail that must not reach a client.
 
-```bash
-make repository-mocks
-```
+Register each new sentinel in `serviceErrorStatus` in
+[api/handler/errors.go](./api/handler/errors.go), otherwise a perfectly expected
+failure surfaces as a 500.
 
-This generates `internal/repository/mock/product.repository_mock.go`
+### Validation
 
-**Step 4: Implement Repository** (See [`repository/README.md`](./repository/README.md))
+Validation lives in `binding` tags on the request DTO, not in hand-written checks
+inside handlers:
 
 ```go
-// repository/implementations/product/product.gorm.go
-package product
-
-import (
-    "github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
-    "github.com/ferriyusra/clean-arch-go-gin/internal/repository/interfaces"
-    "gorm.io/gorm"
-)
-
-type GORMProductRepository struct {
-    db *gorm.DB
-}
-
-func NewGORMProductRepository(db *gorm.DB) (interfaces.ProductRepository, error) {
-    if err := db.AutoMigrate(&entity.ProductEntity{}); err != nil {
-        return nil, err
-    }
-    return &GORMProductRepository{db: db}, nil
-}
-
-// repository/implementations/product/create.gorm.go
-func (r *GORMProductRepository) Create(ctx context.Context, product entity.ProductEntity) (*uuid.UUID, error) {
-    if product.ID == uuid.Nil {
-        product.ID = uuid.New()
-    }
-    if err := r.db.WithContext(ctx).Create(&product).Error; err != nil {
-        return nil, err
-    }
-    return &product.ID, nil
-}
-```
-
-**Step 5: Define Request/Response Models** (See [`model/README.md`](./model/README.md))
-
-```go
-// model/request/product.go
-package request
-
 type CreateProductRequest struct {
-    Name  string  `json:"name"`
-    Price float64 `json:"price"`
-}
-
-// model/response/product.go
-package response
-
-import "github.com/google/uuid"
-
-type GetProduct struct {
-    ID    uuid.UUID `json:"id"`
-    Name  string    `json:"name"`
-    Price float64   `json:"price"`
+    Name  string  `json:"name" binding:"required,max=255"`
+    Price float64 `json:"price" binding:"required,gt=0"`
 }
 ```
 
-**Step 6: Write Service Tests FIRST** (See [`service/README.md`](./service/README.md) - TDD!)
+`c.ShouldBindJSON` then produces field-level errors, which `respondBindError` turns
+into a `Validation failed` response keyed by JSON field name.
 
-```go
-// service/product/create_product.service_test.go
-package product
-
-import (
-    "context"
-    "testing"
-    "github.com/golang/mock/gomock"
-    "github.com/google/uuid"
-    "github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
-    "github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
-)
-
-func TestCreateProduct(t *testing.T) {
-    ctrl := gomock.NewController(t)
-    defer ctrl.Finish()
-
-    mockRepo := mock.NewMockProductRepository(ctrl)
-    svc := NewProductService(mockRepo)
-
-    // Setup mock expectation
-    productID := uuid.New()
-    mockRepo.EXPECT().
-        Create(gomock.Any(), gomock.Any()).
-        Return(&productID, nil).
-        Times(1)
-
-    // Test
-    req := &request.CreateProductRequest{
-        Name:  "Test Product",
-        Price: 99.99,
-    }
-    result, err := svc.CreateProduct(context.Background(), req)
-
-    // Assert
-    if err != nil {
-        t.Errorf("unexpected error: %v", err)
-    }
-    if result == nil {
-        t.Error("expected result, got nil")
-    }
-}
-```
-
-**Step 7: Implement Service** (Make tests pass)
-
-```go
-// service/product/product.service.go
-package product
-
-import (
-    "context"
-    "github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
-    "github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
-    "github.com/ferriyusra/clean-arch-go-gin/internal/repository/interfaces"
-)
-
-type ProductService interface {
-    CreateProduct(ctx context.Context, req *request.CreateProductRequest) (*response.GetProduct, error)
-}
-
-type productService struct {
-    repo interfaces.ProductRepository
-}
-
-func NewProductService(repo interfaces.ProductRepository) ProductService {
-    return &productService{repo: repo}
-}
-
-// service/product/create_product.service.go
-func (s *productService) CreateProduct(ctx context.Context, req *request.CreateProductRequest) (*response.GetProduct, error) {
-    product := entity.ProductEntity{
-        Name:  req.Name,
-        Price: req.Price,
-    }
-    
-    id, err := s.repo.Create(ctx, product)
-    if err != nil {
-        return nil, err
-    }
-    
-    return &response.GetProduct{
-        ID:    *id,
-        Name:  req.Name,
-        Price: req.Price,
-    }, nil
-}
-```
-
-Run tests: `go test ./internal/service/product -v` ✅ Tests should now pass!
-
-**Step 8: Create Handler**
-
-```go
-// api/handler/product.handler.go
-package handler
-
-import (
-    "net/http"
-    "github.com/gin-gonic/gin"
-    "github.com/ferriyusra/clean-arch-go-gin/internal/service/product"
-    "github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
-    "github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
-)
-
-type ProductHandler struct {
-    service product.ProductService
-}
-
-func NewProductHandler(service product.ProductService) *ProductHandler {
-    return &ProductHandler{service: service}
-}
-
-func (h *ProductHandler) CreateProduct(c *gin.Context) {
-    var req request.CreateProductRequest
-    if err := c.ShouldBindJSON(&req); err != nil {
-        c.JSON(http.StatusBadRequest, response.Err("Invalid request"))
-        return
-    }
-
-    result, err := h.service.CreateProduct(c.Request.Context(), &req)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, response.Err(err.Error()))
-        return
-    }
-
-    c.JSON(http.StatusCreated, response.OK("Product created", result))
-}
-```
-
-**Step 9: Wire Dependencies**
-
-```go
-// di/container.go - Add to NewContainer()
-productRepo, _ := productRepoImpl.NewGORMProductRepository(db)
-productSvc := productService.NewProductService(productRepo)
-productHandler := handler.NewProductHandler(productSvc)
-
-// api/router.go - Add routes
-func SetupProductRoutes(r *gin.Engine, handler *handler.ProductHandler) {
-    api := r.Group("/api/products")
-    api.POST("", handler.CreateProduct)
-    api.GET("/:id", handler.GetProduct)
-}
-```
-
-**Verify**: Start server (`make dev`) and test: `curl -X POST http://localhost:8080/api/products -d '{"name":"Widget","price":29.99}'`
-
-## 📍 API Endpoints
-
-### Public Routes
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Health check |
-| GET | `/api/message` | Get message |
-| GET | `/api/counter` | Get counter value |
-| POST | `/api/counter` | Increment counter |
-
-### Authentication Routes (Public)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/auth/register` | Register new user |
-| POST | `/api/auth/login` | Login (returns JWT tokens) |
-| POST | `/api/auth/logout` | Logout user |
-| POST | `/api/auth/refresh` | Refresh access token |
-| GET | `/api/auth/csrf` | Get CSRF token |
-
-### Protected Routes (Requires JWT)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/auth/me` | Get current user info |
-
-## 🧪 Testing
-
-### Running Tests
+## Testing
 
 ```bash
-# All tests
-make test
-
-# Verbose output
-make test-verbose
-
-# With coverage report
-make test-coverage
+make test           # everything, with -race
+make test-coverage  # writes coverage.html
+go test -run TestRefresh ./internal/service/user/...
 ```
 
-### Test Coverage by Layer
+| Layer | Approach |
+|-------|----------|
+| **service** | Table-driven, repositories replaced with gomock |
+| **middleware** | `httptest` against a minimal `gin.New()` router |
+| **handler** | `httptest` with a hand-written service stub; asserts statuses, validation messages, and that internal errors are not leaked |
+| **di** | Full HTTP flow through the real router against a temporary SQLite database |
+| **platform** | Config defaults and env overrides |
 
-- **Repository**: Tested via service layer mocks
-- **Service**: Unit tests with mocked repositories
-- **Handler**: Integration tests (future)
+Repository implementations are covered indirectly by the `di` integration tests
+rather than by mocking GORM.
 
-For detailed testing guides, see:
-- Service testing: [`service/README.md`](./service/README.md)
-- Repository mocks: [`repository/README.md`](./repository/README.md)
+## Code Standards
 
-## 🔐 Authentication & Security
+- `gofmt` clean; `make check` before you call something done.
+- Imports in three blank-line-separated groups: stdlib, third-party, this module.
+- Every service and repository method takes `context.Context` as its first parameter
+  and checks for cancellation before doing work.
+- Services depend on repository *interfaces*, never concrete types.
+- Entities never leave the repository layer; convert to a response DTO in the service.
+- Use `errors.Is`/`errors.As`, never `==`, when inspecting errors.
+- One action per file: `<action>.<layer>.go` with `<action>.<layer>_test.go` beside it.
+- Exported types and functions get doc comments; comments explain *why*, not *what*.
 
-### JWT Token Flow
+## Troubleshooting
 
-1. **Register/Login**: Returns `access_token` (15 min) and `refresh_token` (7 days)
-2. **API Requests**: Include `Authorization: Bearer <access_token>` header
-3. **Token Refresh**: Use `/api/auth/refresh` with refresh token to get new access token
-4. **Protected Routes**: Validated via `AuthMiddleware`
-
-### CSRF Protection
-
-For state-changing operations:
-1. Get token: `GET /api/auth/csrf`
-2. Include in request: `X-CSRF-Token: <token>`
-
-### Security Best Practices
-
-- ✅ Passwords hashed with bcrypt
-- ✅ JWT secrets from environment variables
-- ✅ CORS configured
-- ✅ Context-aware request handling
-- ✅ Soft deletes for audit trails
-
-## 🏭 Production Deployment
-
-### Build for Production
-
+**Port already in use**
 ```bash
-make build
-```
-
-Outputs:
-- `bin/server` - Optimized binary with embedded frontend
-
-### Environment Configuration
-
-**For Production:**
-
-```env
-# Server
-SERVER_PORT=8080
-SERVER_HOST=0.0.0.0
-
-# Database (PostgreSQL recommended)
-DATABASE_TYPE=postgres
-DATABASE_DSN=postgresql://user:password@localhost:5432/dbname?sslmode=require
-
-# JWT Secrets (GENERATE NEW ONES!)
-JWT_ACCESS_SECRET=<generate-strong-secret>
-JWT_REFRESH_SECRET=<generate-strong-secret>
-
-# Timeouts
-SERVER_READ_TIMEOUT=15s
-SERVER_WRITE_TIMEOUT=15s
-SERVER_IDLE_TIMEOUT=60s
-
-# Database Pooling
-DATABASE_MAX_OPEN_CONNS=25
-DATABASE_MAX_IDLE_CONNS=5
-DATABASE_CONN_MAX_LIFETIME=5m
-
-# Production Mode
-DEV_MODE=false
-```
-
-### Running in Production
-
-**Option 1: Direct Binary**
-```bash
-./bin/server
-```
-
-**Option 2: Docker Compose**
-```bash
-docker-compose -f docker-compose.prod.yml up -d
-```
-
-**Option 3: Systemd Service**
-```ini
-[Unit]
-Description=Clean Go Vite React Backend
-After=network.target
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=/opt/app
-ExecStart=/opt/app/bin/server
-Restart=always
-Environment="DATABASE_TYPE=postgres"
-Environment="DATABASE_DSN=postgresql://..."
-
-[Install]
-WantedBy=multi-user.target
-```
-
-## 📊 Database Management
-
-### Supported Databases
-
-- **SQLite**: Default for development (no setup required)
-- **PostgreSQL**: Recommended for production
-
-### Automatic Migrations
-
-Migrations run automatically via GORM's `AutoMigrate()` when repositories are initialized. See each repository's constructor in `repository/implementations/`.
-
-### Switching to PostgreSQL
-
-1. Install PostgreSQL
-2. Create database:
-   ```bash
-   createdb myapp
-   ```
-3. Update `.env`:
-   ```env
-   DATABASE_TYPE=postgres
-   DATABASE_DSN=postgresql://user:pass@localhost:5432/myapp?sslmode=disable
-   ```
-
-## 🐛 Troubleshooting
-
-### Port Already in Use
-```bash
-# Find and kill process on port 8080
 lsof -ti:8080 | xargs kill -9
 ```
 
-### Database Locked (SQLite)
+**A new table or column is missing** — you added an entity but not its migration. Add
+it to `migrationModels` in [platform/migrate.go](./platform/migrate.go). Note that
+AutoMigrate never alters or drops existing columns, so changing a field's type needs a
+real migration.
+
+**`SQLite database is locked`** (development only)
 ```bash
-# Development only - delete and restart
-rm dev.db
-make server
+rm dev.db && make dev
 ```
 
-### Module Not Found
+**Refuses to start: "JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be set"** — you are
+running with `DEV_MODE=false`. Either set real secrets (≥32 chars, different from each
+other) or use `make dev`.
+
+**A known failure returns 500** — the sentinel is missing from `serviceErrorStatus` in
+[api/handler/errors.go](./api/handler/errors.go).
+
+**Mock generation fails** — install the tool and make sure it is on your `PATH`:
 ```bash
-go mod tidy
-go mod download
+go install github.com/golang/mock/mockgen@latest
+make repository-mocks
 ```
 
-### Hot Reload Not Working
+**Hot reload not working**
 ```bash
-# Reinstall Air
-go install github.com/air-verse/air@latest
-
-# Check .air.toml configuration
-cat .air.toml
+go install github.com/air-verse/air@latest   # then check .air.toml
 ```
 
-## 📝 Code Standards
+## Key Dependencies
 
-### General Guidelines
-
-1. **Dependency Direction**: Always depend on interfaces, never concrete types
-2. **Error Handling**: Handle all errors explicitly, never ignore
-3. **Context Usage**: Pass `context.Context` as first parameter in all operations
-4. **Testing**: Write tests before implementation (TDD)
-5. **Naming**: Use descriptive names, avoid abbreviations
-
-### Layer-Specific Standards
-
-| Layer | Key Rules |
-|-------|-----------|
-| **Models** | No business logic, pure data structures |
-| **Repositories** | Use UUID for IDs, always accept context |
-| **Services** | Business logic only, use Request/Response DTOs |
-| **Handlers** | Minimal logic, delegate to services |
-
-For detailed standards, see the README in each layer's directory.
-
-## 🔗 Key Dependencies
-
-From `go.mod`:
-
-- **[Gin](https://gin-gonic.com/)**: High-performance HTTP framework
-- **[GORM](https://gorm.io/)**: ORM with PostgreSQL/SQLite support
-- **[JWT-Go](https://github.com/golang-jwt/jwt)**: JWT token handling
-- **[UUID](https://github.com/google/uuid)**: UUID generation
-- **[Bcrypt](https://pkg.go.dev/golang.org/x/crypto/bcrypt)**: Password hashing
-- **[GoDotEnv](https://github.com/joho/godotenv)**: Environment variables
-- **[GoMock](https://github.com/golang/mock)**: Mock generation for testing
-
-## 📚 Further Reading
-
-- **Implementation Guides**:
-  - [Model Layer Guide](./model/README.md) - Entities, Requests, Responses
-  - [Service Layer Guide](./service/README.md) - TDD workflow
-  - [Repository Layer Guide](./repository/README.md) - GORM implementation
-
-- **External Resources**:
-  - [Clean Architecture by Uncle Bob](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html)
-  - [Gin Framework Docs](https://gin-gonic.com/docs/)
-  - [GORM Documentation](https://gorm.io/docs/)
-  - [Go Testing Best Practices](https://go.dev/doc/tutorial/add-a-test)
-
-## 🤝 Contributing
-
-When contributing:
-
-1. Follow existing architecture patterns
-2. Read the relevant layer's README before making changes
-3. Write tests for new functionality
-4. Use dependency injection throughout
-5. Keep business logic in services, not handlers
-6. Update documentation for new features
-
----
-
-**Quick Reference:**
-- Entry Point: `cmd/server/main.go`
-- DI Container: `internal/di/container.go`
-- Route Config: `internal/api/router.go`
-- Framework: Gin
-- ORM: GORM
-- Architecture: Clean Architecture with Dependency Injection
+| Package | Purpose |
+|---------|---------|
+| `github.com/gin-gonic/gin` | HTTP router and middleware |
+| `github.com/gin-contrib/cors` | CORS |
+| `gorm.io/gorm` | ORM |
+| `github.com/glebarez/sqlite` | Pure-Go SQLite driver (no CGO) |
+| `gorm.io/driver/postgres` | PostgreSQL driver |
+| `github.com/golang-jwt/jwt/v5` | JWT signing and validation |
+| `golang.org/x/crypto/bcrypt` | Password hashing |
+| `github.com/go-playground/validator/v10` | Request validation behind `binding` tags |
+| `github.com/google/uuid` | UUID primary keys and request IDs |
+| `github.com/joho/godotenv` | `.env` loading |
+| `github.com/golang/mock` | Test mocks |

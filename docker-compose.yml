@@ -1,0 +1,48 @@
+# Local Postgres-backed stack. The default `make dev` flow uses SQLite and needs
+# none of this; bring this up when you want to develop against Postgres.
+#
+#   docker compose up --build
+#
+services:
+  api:
+    build:
+      context: .
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    environment:
+      SERVER_PORT: 8080
+      DATABASE_TYPE: postgres
+      DATABASE_DSN: "host=postgres user=postgres password=postgres dbname=app port=5432 sslmode=disable"
+      DATABASE_AUTO_MIGRATE: "true"
+      # Compose provides real secrets here so the API can run with DEV_MODE off.
+      # Replace these before this file goes anywhere near a shared environment.
+      DEV_MODE: "false"
+      JWT_ACCESS_SECRET: "local-compose-access-secret-change-me-32+"
+      JWT_REFRESH_SECRET: "local-compose-refresh-secret-change-me-32+"
+      ALLOWED_ORIGINS: "http://localhost:5173"
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # The API waits on this, so it never starts against a database that is
+      # still initialising.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:

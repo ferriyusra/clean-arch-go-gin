@@ -22,22 +22,45 @@ func TestNewConfig_DefaultValues(t *testing.T) {
 		t.Errorf("expected default port 8080, got %d", cfg.Server.Port)
 	}
 
-	if cfg.Redis.Host != "localhost" {
-		t.Errorf("expected default Redis host 'localhost', got %q", cfg.Redis.Host)
+	if cfg.Database.Type != "sqlite" {
+		t.Errorf("expected default database type 'sqlite', got %q", cfg.Database.Type)
 	}
 
-	if cfg.Redis.Port != 6379 {
-		t.Errorf("expected default Redis port 6379, got %d", cfg.Redis.Port)
+	if cfg.Auth.JWTIssuer != "boilerplate-golang-gin" {
+		t.Errorf("expected default issuer 'boilerplate-golang-gin', got %q", cfg.Auth.JWTIssuer)
 	}
 
+	if cfg.Auth.AccessTokenExpiry != 15*time.Minute {
+		t.Errorf("expected default access token expiry 15m, got %v", cfg.Auth.AccessTokenExpiry)
+	}
+
+	if cfg.Auth.RefreshTokenExpiry != 7*24*time.Hour {
+		t.Errorf("expected default refresh token expiry 168h, got %v", cfg.Auth.RefreshTokenExpiry)
+	}
+
+	if cfg.Auth.DevMode {
+		t.Error("expected DevMode to default to false")
+	}
+
+	if len(cfg.Auth.AllowedOrigins) != 1 || cfg.Auth.AllowedOrigins[0] != "http://localhost:5173" {
+		t.Errorf("expected default allowed origins [http://localhost:5173], got %v", cfg.Auth.AllowedOrigins)
+	}
+
+	if cfg.RateLimit.LoginAttempts != 10 {
+		t.Errorf("expected default login attempts 10, got %d", cfg.RateLimit.LoginAttempts)
+	}
+
+	if cfg.RateLimit.LoginWindow != time.Minute {
+		t.Errorf("expected default login window 1m, got %v", cfg.RateLimit.LoginWindow)
+	}
 }
 
 func TestNewConfig_EnvironmentOverrides(t *testing.T) {
 	// Clear and set environment variables
 	clearEnv()
 	os.Setenv("SERVER_PORT", "9000")
-	os.Setenv("REDIS_HOST", "redis.example.com")
-	os.Setenv("REDIS_PORT", "6380")
+	os.Setenv("DATABASE_TYPE", "postgres")
+	os.Setenv("ALLOWED_ORIGINS", "https://a.example.com, https://b.example.com")
 	defer clearEnv()
 
 	// Act
@@ -48,12 +71,18 @@ func TestNewConfig_EnvironmentOverrides(t *testing.T) {
 		t.Errorf("expected port 9000, got %d", cfg.Server.Port)
 	}
 
-	if cfg.Redis.Host != "redis.example.com" {
-		t.Errorf("expected Redis host 'redis.example.com', got %q", cfg.Redis.Host)
+	if cfg.Database.Type != "postgres" {
+		t.Errorf("expected database type 'postgres', got %q", cfg.Database.Type)
 	}
 
-	if cfg.Redis.Port != 6380 {
-		t.Errorf("expected Redis port 6380, got %d", cfg.Redis.Port)
+	want := []string{"https://a.example.com", "https://b.example.com"}
+	if len(cfg.Auth.AllowedOrigins) != len(want) {
+		t.Fatalf("expected %d allowed origins, got %v", len(want), cfg.Auth.AllowedOrigins)
+	}
+	for i, origin := range want {
+		if cfg.Auth.AllowedOrigins[i] != origin {
+			t.Errorf("allowed origin %d: expected %q, got %q", i, origin, cfg.Auth.AllowedOrigins[i])
+		}
 	}
 }
 
@@ -254,24 +283,43 @@ func TestNewConfig_AllServerSettings(t *testing.T) {
 	}
 }
 
-func TestNewConfig_RedisAuth(t *testing.T) {
+func TestNewConfig_AuthOverrides(t *testing.T) {
 	clearEnv()
-	os.Setenv("REDIS_HOST", "redis.prod")
-	os.Setenv("REDIS_PORT", "6380")
-	os.Setenv("REDIS_DB", "2")
-	os.Setenv("REDIS_PASSWORD", "secret123")
+	os.Setenv("JWT_ACCESS_SECRET", "access-secret")
+	os.Setenv("JWT_REFRESH_SECRET", "refresh-secret")
+	os.Setenv("JWT_ISSUER", "my-service")
+	os.Setenv("JWT_ACCESS_EXPIRY", "5m")
+	os.Setenv("JWT_REFRESH_EXPIRY", "24h")
+	os.Setenv("DEV_MODE", "true")
+	os.Setenv("RATE_LIMIT_LOGIN_ATTEMPTS", "3")
+	os.Setenv("RATE_LIMIT_LOGIN_WINDOW", "30s")
 	defer clearEnv()
 
 	cfg := NewConfig()
 
-	if cfg.Redis.Host != "redis.prod" {
-		t.Errorf("expected host 'redis.prod'")
+	if cfg.Auth.JWTAccessSecret != "access-secret" {
+		t.Errorf("expected access secret 'access-secret', got %q", cfg.Auth.JWTAccessSecret)
 	}
-	if cfg.Redis.DB != 2 {
-		t.Errorf("expected db 2, got %d", cfg.Redis.DB)
+	if cfg.Auth.JWTRefreshSecret != "refresh-secret" {
+		t.Errorf("expected refresh secret 'refresh-secret', got %q", cfg.Auth.JWTRefreshSecret)
 	}
-	if cfg.Redis.Password != "secret123" {
-		t.Errorf("expected password 'secret123'")
+	if cfg.Auth.JWTIssuer != "my-service" {
+		t.Errorf("expected issuer 'my-service', got %q", cfg.Auth.JWTIssuer)
+	}
+	if cfg.Auth.AccessTokenExpiry != 5*time.Minute {
+		t.Errorf("expected access expiry 5m, got %v", cfg.Auth.AccessTokenExpiry)
+	}
+	if cfg.Auth.RefreshTokenExpiry != 24*time.Hour {
+		t.Errorf("expected refresh expiry 24h, got %v", cfg.Auth.RefreshTokenExpiry)
+	}
+	if !cfg.Auth.DevMode {
+		t.Error("expected DevMode true")
+	}
+	if cfg.RateLimit.LoginAttempts != 3 {
+		t.Errorf("expected login attempts 3, got %d", cfg.RateLimit.LoginAttempts)
+	}
+	if cfg.RateLimit.LoginWindow != 30*time.Second {
+		t.Errorf("expected login window 30s, got %v", cfg.RateLimit.LoginWindow)
 	}
 }
 
@@ -280,7 +328,10 @@ func clearEnv() {
 	vars := []string{
 		"SERVER_PORT", "SERVER_HOST", "SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT", "SERVER_IDLE_TIMEOUT",
 		"DATABASE_DSN", "DATABASE_MAX_OPEN_CONNS", "DATABASE_MAX_IDLE_CONNS", "DATABASE_CONN_MAX_LIFETIME",
-		"REDIS_HOST", "REDIS_PORT", "REDIS_DB", "REDIS_PASSWORD",
+		"DATABASE_TYPE",
+		"JWT_ACCESS_SECRET", "JWT_REFRESH_SECRET", "JWT_ISSUER", "JWT_ACCESS_EXPIRY", "JWT_REFRESH_EXPIRY",
+		"DEV_MODE", "ALLOWED_ORIGINS",
+		"RATE_LIMIT_LOGIN_ATTEMPTS", "RATE_LIMIT_LOGIN_WINDOW",
 	}
 	for _, v := range vars {
 		os.Unsetenv(v)

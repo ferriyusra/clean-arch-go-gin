@@ -12,9 +12,22 @@
       "Bash(rm -rf .claude/temp)",
       "Bash(./.claude/scripts/update-openapi.sh:*)",
       "Bash(jq:*)",
-      "Bash(osv-scanner:*)"
+      "Bash(osv-scanner:*)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(xargs sed -i '' 's|github.com/ferriyusra/movie-service|github.com/ferriyusra/boilerplate-golang-gin|g')",
+      "Bash(python3 /private/tmp/claude-501/-Users-ferri-Documents-dev-learning-backend-golang-boilerplate-golang-gin/767f5e09-4397-47df-aacd-f51e6ecb4994/scratchpad/fiximports.py)",
+      "Bash(gofmt -l .)",
+      "Bash(gofmt -w .)",
+      "Bash(sed -i '' 's|claims.Issuer != \"movie-service\"|claims.Issuer != DefaultIssuer|g; s|expected movie-service, got %s|expected %s, got %s|g; s|expected issuer .movie-service., got %s|expected issuer %s, got %s|g' internal/service/token/*_test.go && grep -rn \"movie-service\\\\|DefaultIssuer\\\\|Issuer mismatch\\\\|expected issuer\" internal/service/token/*_test.go)",
+      "Bash(sed -i '' 's|t.Errorf\\(\"Issuer mismatch: expected %s, got %s\", claims.Issuer\\)|t.Errorf\\(\"Issuer mismatch: expected %s, got %s\", DefaultIssuer, claims.Issuer\\)|; s|t.Errorf\\(\"expected issuer %s, got %s\", claims.Issuer\\)|t.Errorf\\(\"expected issuer %s, got %s\", DefaultIssuer, claims.Issuer\\)|' internal/service/token/validate_access.service_test.go internal/service/token/generate_refresh.service_test.go internal/service/token/validate_refresh.service_test.go)",
+      "Bash(gofmt -l internal/platform/)"
     ],
-    "deny": []
+    "deny": [],
+    "additionalDirectories": [
+      "/Users/ferri/Documents/dev/learning/backend/golang/boilerplate-golang-gin/internal/service/token"
+    ]
   },
   "hooks": {
     "PreToolUse": [

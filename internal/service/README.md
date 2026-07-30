@@ -57,9 +57,9 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/repository/mock"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/request"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/response"
 )
 
 func TestCreateUser(t *testing.T) {
@@ -133,9 +133,9 @@ package user
 import (
 	"context"
 
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/interfaces"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/request"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/response"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/repository/interfaces"
 )
 
 // UserService defines the interface for user operations
@@ -168,8 +168,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/request"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/response"
 )
 
 // CreateUser creates a new user
@@ -204,7 +204,7 @@ Expected output:
 --- PASS: TestCreateUser/should_return_error_when_repository_fails (0.00s)
 --- PASS: TestCreateUser (0.00s)
 PASS
-ok  	github.com/ferriyusra/clean-arch-go-gin/internal/service/user	0.001s
+ok  	github.com/ferriyusra/boilerplate-golang-gin/internal/service/user	0.001s
 ```
 
 ## Best Practices
@@ -242,10 +242,10 @@ return response.CreateUserResponse{...}, nil
 ### 4. Test Error Cases
 
 Include tests for:
-- Repository errors
+- Expected domain failures — assert the exact sentinel with `errors.Is`
+- Repository errors — assert that an error surfaces, since the wrapped text is not a contract
 - Context cancellation
 - Context deadline exceeded
-- Invalid input validation
 
 ```go
 {
@@ -362,17 +362,66 @@ func (s *userService) GetUser(ctx context.Context, id uuid.UUID) (*response.GetU
 }
 ```
 
-### Pattern 2: Error Handling
+### Pattern 2: Error Handling — Sentinels vs Wrapping
+
+This is the contract the whole error path depends on, so it is worth getting right.
+
+Every **expected** failure gets a sentinel error in the package's `errors.go`. Every
+**unexpected** failure is wrapped with context. Never return a bare repository error.
 
 ```go
-// Test
-mockRepo.EXPECT().DeleteUser(gomock.Any(), userID).Return(errors.New("not found"))
+// internal/service/user/errors.go
+var ErrUserNotFound = errors.New("user not found")
 
 // Implementation
-func (s *userService) DeleteUser(ctx context.Context, id uuid.UUID) error {
-	return s.repo.DeleteUser(ctx, id)
+func (s *userService) GetUser(ctx context.Context, id uuid.UUID) (*response.GetUser, error) {
+	user, err := s.userRepository.FindByID(ctx, id)
+	if err != nil {
+		// Unexpected: wrap it. The handler logs this and answers a generic 500.
+		return nil, fmt.Errorf("finding user by id: %w", err)
+	}
+	if user == nil {
+		// Expected: a sentinel. The handler maps it to 404 and echoes the message.
+		return nil, ErrUserNotFound
+	}
+	return &response.GetUser{ID: user.ID, Email: user.Email, Name: user.Name}, nil
 }
 ```
+
+Assert with `errors.Is`, not on message strings — wrapping changes the message but
+never the identity:
+
+```go
+tests := []struct {
+	name           string
+	mockFindByID   *entity.UserEntity
+	mockErr        error
+	expectedError  error // the sentinel we expect, if any
+	expectAnyError bool  // for wrapped internal failures
+}{
+	{
+		name:          "should return ErrUserNotFound when the user is absent",
+		expectedError: ErrUserNotFound,
+	},
+	{
+		name:           "should wrap repository failures",
+		mockErr:        errors.New("database error"),
+		expectAnyError: true,
+	},
+}
+
+// ...
+if tt.expectedError != nil && !errors.Is(err, tt.expectedError) {
+	t.Errorf("expected error %v, got %v", tt.expectedError, err)
+}
+```
+
+Two rules that keep this honest:
+
+1. **Sentinel messages are shown to clients.** Do not put internal detail in them.
+2. **Register every new sentinel** in `serviceErrorStatus` in
+   [`api/handler/errors.go`](../api/handler/errors.go), or the handler falls through to
+   a 500 for a failure you fully expected.
 
 ### Pattern 3: Multiple Repository Calls
 

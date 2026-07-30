@@ -1,8 +1,9 @@
 package refresh_token
 
 import (
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	"gorm.io/gorm"
+
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
 )
 
 // GORMRefreshTokenRepository is a GORM implementation of RefreshTokenRepository
@@ -10,13 +11,12 @@ type GORMRefreshTokenRepository struct {
 	db *gorm.DB
 }
 
-// RefreshTokenModel represents the refresh_token_entities table schema
+// RefreshTokenModel represents the refresh_tokens table schema
 type RefreshTokenModel = entity.RefreshTokenEntity
 
-// NewGORMRefreshTokenRepository creates a new GORM refresh token repository
-func NewGORMRefreshTokenRepository(db *gorm.DB) (*GORMRefreshTokenRepository, error) {
-	if err := db.AutoMigrate(&RefreshTokenModel{}); err != nil {
-		return nil, err
-	}
-	return &GORMRefreshTokenRepository{db: db}, nil
+// NewGORMRefreshTokenRepository creates a new GORM refresh token repository.
+//
+// Schema migration is not performed here — see platform.Migrate.
+func NewGORMRefreshTokenRepository(db *gorm.DB) *GORMRefreshTokenRepository {
+	return &GORMRefreshTokenRepository{db: db}
 }

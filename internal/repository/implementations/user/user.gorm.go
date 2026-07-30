@@ -1,8 +1,9 @@
 package user
 
 import (
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	"gorm.io/gorm"
+
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
 )
 
 // GORMUserRepository is a GORM implementation of UserRepository
@@ -13,14 +14,11 @@ type GORMUserRepository struct {
 // UserModel represents the users table schema
 type UserModel = entity.UserEntity
 
-// NewGORMUserRepository creates a new GORM user repository
-func NewGORMUserRepository(db *gorm.DB) (*GORMUserRepository, error) {
-	// Auto-migrate the schema
-	if err := db.AutoMigrate(&UserModel{}); err != nil {
-		return nil, err
-	}
-
+// NewGORMUserRepository creates a new GORM user repository.
+//
+// Schema migration is not performed here — see platform.Migrate.
+func NewGORMUserRepository(db *gorm.DB) *GORMUserRepository {
 	return &GORMUserRepository{
 		db: db,
-	}, nil
+	}
 }

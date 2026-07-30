@@ -12,12 +12,12 @@ func TestGenerateAccessToken(t *testing.T) {
 	testUserID := uuid.New()
 
 	tests := []struct {
-		name            string
-		config          TokenConfig
-		userID          uuid.UUID
-		email           string
-		userName        string
-		expectedError   bool
+		name          string
+		config        TokenConfig
+		userID        uuid.UUID
+		email         string
+		userName      string
+		expectedError bool
 	}{
 		{
 			name: "should generate access token successfully",
@@ -125,7 +125,7 @@ func TestGenerateAccessTokenClaimsExpiry(t *testing.T) {
 	})
 
 	now := time.Now()
-	if claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(now) {
+	if claims.ExpiresAt == nil || claims.ExpiresAt.Before(now) {
 		t.Errorf("token already expired")
 	}
 	if claims.IssuedAt != nil {

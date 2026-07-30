@@ -2,9 +2,11 @@ package user
 
 import (
 	"context"
+	"errors"
 
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	"gorm.io/gorm"
+
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
 )
 
 // FindByEmail finds a user by email in GORM
@@ -17,7 +19,7 @@ func (r *GORMUserRepository) FindByEmail(ctx context.Context, email string) (*en
 
 	var user entity.UserEntity
 	if err := r.db.WithContext(ctx).Where("email = ?", email).First(&user).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err

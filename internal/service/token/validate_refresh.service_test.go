@@ -126,8 +126,6 @@ func TestValidateRefreshTokenExpired(t *testing.T) {
 	}
 }
 
-
-
 func TestValidateRefreshTokenClaimsIntegrity(t *testing.T) {
 	testUserID := uuid.New()
 
@@ -150,8 +148,8 @@ func TestValidateRefreshTokenClaimsIntegrity(t *testing.T) {
 	if claims.UserID != testUserID {
 		t.Errorf("UserID mismatch: expected %v, got %v", testUserID, claims.UserID)
 	}
-	if claims.Issuer != "go-vite-react" {
-		t.Errorf("Issuer mismatch: expected go-vite-react, got %s", claims.Issuer)
+	if claims.Issuer != DefaultIssuer {
+		t.Errorf("Issuer mismatch: expected %s, got %s", DefaultIssuer, claims.Issuer)
 	}
 	// Refresh token should not have email or name
 	if claims.Email != "" {

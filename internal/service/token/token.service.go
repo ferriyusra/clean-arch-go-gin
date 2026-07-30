@@ -7,12 +7,16 @@ import (
 	"github.com/google/uuid"
 )
 
+// DefaultIssuer is used as the JWT `iss` claim when TokenConfig.Issuer is empty.
+const DefaultIssuer = "boilerplate-golang-gin"
+
 // TokenConfig holds JWT configuration
 type TokenConfig struct {
 	AccessTokenSecret  string
 	AccessTokenExpiry  time.Duration
 	RefreshTokenSecret string
 	RefreshTokenExpiry time.Duration
+	Issuer             string
 }
 
 // TokenClaims represents JWT claims
@@ -29,6 +33,7 @@ type TokenService interface {
 	GenerateRefreshToken(userID uuid.UUID) (string, error)
 	ValidateAccessToken(tokenString string) (*TokenClaims, error)
 	ValidateRefreshToken(tokenString string) (*TokenClaims, error)
+	RefreshTokenExpiry() time.Duration
 }
 
 // tokenService implements TokenService
@@ -38,7 +43,15 @@ type tokenService struct {
 
 // NewTokenService creates a new token service
 func NewTokenService(config TokenConfig) TokenService {
+	if config.Issuer == "" {
+		config.Issuer = DefaultIssuer
+	}
 	return &tokenService{
 		config: config,
 	}
+}
+
+// RefreshTokenExpiry returns the configured refresh token TTL
+func (s *tokenService) RefreshTokenExpiry() time.Duration {
+	return s.config.RefreshTokenExpiry
 }

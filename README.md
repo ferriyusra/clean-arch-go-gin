@@ -1,244 +1,292 @@
-# Clean Architecture Go API (Gin)
+# Go Clean Architecture Boilerplate (Gin)
 
-A production-ready Go backend built with **Clean Architecture** principles using the **Gin** framework and **GORM** ORM.
+A production-oriented starting point for a Go HTTP API: **Gin** for routing, **GORM**
+for persistence, JWT bearer authentication with rotating refresh tokens, and Clean
+Architecture layering with unit tests at every layer.
 
-This is the backend-only version extracted from [clean-arch-go-vite-react](https://github.com/ferriyusra/clean-arch-go-vite-react), with no frontend embedding or dependencies.
+Backend only — no frontend embedding or dependencies.
 
 ## Quick Start
 
 ```bash
-# Install dependencies
-make install-deps
-
-# Copy and configure environment
-cp env.example .env
-
-# Run with hot-reload
-make dev
-
-# Or run directly
-make server
+make install-deps     # Install dependencies
+cp env.example .env   # Configure (works as-is for local dev)
+make dev              # Start with hot-reload (air) on :8080
 ```
 
-The API will be available at `http://localhost:8080`.
+`make dev` sets `DEV_MODE=true`, which falls back to built-in JWT secrets and a
+local SQLite file (`dev.db`), so there is nothing to configure to get started. The
+server refuses to boot in that state once `DEV_MODE=false` — see
+[Production checklist](#production-checklist).
+
+Verify it is up:
+
+```bash
+curl localhost:8080/api/health
+curl localhost:8080/api/health/ready   # also checks the database
+```
+
+### Using this as a template
+
+Rename the module to your own path before writing code:
+
+```bash
+NEW_MODULE=github.com/you/your-service
+grep -rl 'github.com/ferriyusra/boilerplate-golang-gin' --include='*.go' --include='*.md' . \
+  | xargs sed -i '' "s|github.com/ferriyusra/boilerplate-golang-gin|$NEW_MODULE|g"
+sed -i '' "s|^module .*|module $NEW_MODULE|" go.mod
+go mod tidy && make check
+```
+
+Then update `formatters.settings.goimports.local-prefixes` in [.golangci.yml](.golangci.yml)
+and `JWT_ISSUER` in your `.env`. (Drop the `''` after `-i` on GNU sed.)
 
 ## Commands
 
 ```bash
-make dev              # Start server with hot-reload (air)
-make server           # Run server directly
-make build            # Build production binary
-make test             # Run all tests
-make test-coverage    # Run tests with coverage report (generates coverage.html)
-make repository-mocks # Regenerate repository mocks after changing interfaces
-make clean            # Clean build artifacts
+make dev              # Hot-reload server (air), DEV_MODE=true
+make server           # Run directly, DEV_MODE=true
+make build            # Static production binary into ./bin/
+make test             # All tests, with -race and coverage
+make test-coverage    # Writes coverage.html
+make fmt              # gofmt -w .
+make lint             # golangci-lint
+make check            # fmt-check + vet + lint + test — what CI runs
+make repository-mocks # Regenerate mocks after changing a repository interface
+make docker-up        # API + Postgres via docker compose
+make help             # Full list
 ```
 
-## Project Structure
+Run one test: `go test -run TestRefresh ./internal/service/user/...`
 
-```
-cmd/server/main.go          → Entry point, loads config, creates DI container, starts Gin
-internal/di/container.go     → Dependency injection: wires repos → services → handlers → routes
-```
+## API
 
-### Clean Architecture layers (dependencies flow inward only):
+Full specification: [docs/openapi.yaml](docs/openapi.yaml).
 
-```
-internal/
-├── api/                    # HTTP layer
-│   ├── handler/           # Request handlers (bind request, call service, return JSON)
-│   ├── middleware/        # JWT auth + CSRF middleware
-│   └── router.go          # Route registration via SetupRoutes()
-│
-├── service/               # Business logic layer
-│   ├── user/             # User domain services (register, login, refresh, etc.)
-│   ├── counter/          # Counter services
-│   ├── csrf/             # CSRF token services
-│   ├── token/            # JWT token services
-│   ├── health/           # Health check services
-│   └── message/          # Message services
-│
-├── repository/           # Data access layer
-│   ├── interfaces/       # Repository contracts (*.repository_interface.go)
-│   ├── implementations/  # GORM implementations
-│   └── mock/            # Auto-generated gomock mocks
-│
-├── model/                # Data models
-│   ├── entity/          # GORM database models
-│   ├── request/         # API request DTOs
-│   └── response/        # API response DTOs (standardized envelope)
-│
-├── di/                   # Dependency injection container
-└── platform/            # Config loading + database initialization
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/api/health` | — | Liveness; touches no dependencies |
+| GET | `/api/health/ready` | — | Readiness; 503 if the database is down |
+| POST | `/api/auth/register` | — | Create an account |
+| POST | `/api/auth/login` | — | Get an access + refresh token pair |
+| POST | `/api/auth/refresh` | — | Rotate the token pair |
+| GET | `/api/auth/me` | Bearer | Current user |
+| POST | `/api/auth/logout` | Bearer | Revoke all refresh tokens for the user |
+
+The `/api/auth/*` endpoints are rate limited per client IP.
+
+### Response envelope
+
+Every response uses the same shape, built by the helpers in
+[internal/model/response/wrapper.go](internal/model/response/wrapper.go):
+
+```json
+{ "success": true, "message": "Login successful", "data": {} }
 ```
 
-## API Endpoints
-
-### Public
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Health check |
-| GET | `/api/message` | Get message |
-| GET | `/api/csrf` | Get CSRF token |
-| POST | `/api/auth/register` | Register new user |
-| POST | `/api/auth/login` | Login |
-| POST | `/api/auth/refresh` | Refresh access token (requires CSRF) |
-
-### Protected (requires JWT)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/auth/me` | Get current user |
-| POST | `/api/auth/logout` | Logout (requires CSRF) |
-| GET | `/api/counter` | Get counter value |
-| POST | `/api/counter` | Increment counter (requires CSRF) |
-
-## Auth System
-
-JWT tokens stored in HTTP-only cookies. Access token: 15 min, refresh token: 7 days. CSRF protection via `X-CSRF-Token` header for state-changing requests. See [AUTH.md](AUTH.md) for full details.
-
-## Environment
-
-Copy `env.example` to `.env`. Key variables:
-
-- `DEV_MODE=true` — enables dev defaults for JWT secrets
-- `DATABASE_TYPE=sqlite` (default) or `postgres`
-- `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` — **must** be set in production
-- `CSRF_SECRET` — **must** be set in production
-
-## Test-Driven Development (TDD)
-
-This project follows a TDD workflow — tests are written **before** the implementation. All service-layer business logic is covered by unit tests using table-driven patterns and mocked repositories.
-
-### TDD Cycle
-
-```
-1. Write a failing test     → defines the expected behavior
-2. Write minimal code       → make the test pass
-3. Refactor                 → clean up while keeping tests green
+```json
+{ "success": false, "message": "Validation failed",
+  "errors": { "email": "Must be a valid email address" } }
 ```
 
-### Example: Counter Service
+`data` and `errors` are omitted when empty; `meta` carries pagination when needed.
 
-**Step 1 — Write the test first** (`internal/service/counter/get_counter.service_test.go`):
-
-```go
-package counter
-
-import (
-	"context"
-	"errors"
-	"testing"
-
-	"github.com/golang/mock/gomock"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
-)
-
-func TestGetCounter(t *testing.T) {
-	tests := []struct {
-		name          string
-		mockReturn    int
-		mockError     error
-		expectedValue int
-		expectedError bool
-	}{
-		{
-			name:          "should return counter value successfully",
-			mockReturn:    42,
-			mockError:     nil,
-			expectedValue: 42,
-			expectedError: false,
-		},
-		{
-			name:          "should return error when repository fails",
-			mockReturn:    0,
-			mockError:     errors.New("database connection failed"),
-			expectedValue: 0,
-			expectedError: true,
-		},
-		{
-			name:          "should return error on context canceled",
-			mockReturn:    0,
-			mockError:     context.Canceled,
-			expectedValue: 0,
-			expectedError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-
-			mockRepo := mock.NewMockCounterRepository(ctrl)
-			mockRepo.EXPECT().
-				GetCounter(gomock.Any()).
-				Return(tt.mockReturn, tt.mockError).
-				Times(1)
-
-			svc := NewCounterService(mockRepo)
-			result, err := svc.GetCounter(context.Background())
-
-			if tt.expectedError {
-				if err == nil {
-					t.Errorf("expected error, got nil")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if result == nil {
-					t.Errorf("expected result, got nil")
-				} else if result.Value != tt.expectedValue {
-					t.Errorf("expected value %d, got %d", tt.expectedValue, result.Value)
-				}
-			}
-		})
-	}
-}
-```
-
-**Step 2 — Implement to make tests pass** (`internal/service/counter/get_counter.service.go`):
-
-```go
-package counter
-
-import (
-	"context"
-
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
-)
-
-func (s *counterService) GetCounter(ctx context.Context) (*response.GetCounter, error) {
-	value, err := s.repo.GetCounter(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &response.GetCounter{
-		Value: value,
-	}, nil
-}
-```
-
-**Step 3 — Run and verify**:
+### Example flow
 
 ```bash
-# Run specific service tests
-go test ./internal/service/counter -v
+BASE=http://localhost:8080/api
 
-# Run all tests
-make test
+curl -X POST $BASE/auth/register -H 'Content-Type: application/json' \
+  -d '{"email":"user@example.com","password":"supersecret123","name":"Jane"}'
+
+TOKENS=$(curl -s -X POST $BASE/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"user@example.com","password":"supersecret123"}')
+
+ACCESS=$(echo "$TOKENS" | jq -r .data.accessToken)
+curl $BASE/auth/me -H "Authorization: Bearer $ACCESS"
 ```
 
-### Key Testing Patterns
+## Authentication
 
-- **Table-driven tests** — each test case is a struct in a slice, run via `t.Run()`
-- **gomock** — repository interfaces are mocked, so tests run without a database
-- **Context propagation** — all methods accept `context.Context`, tested with cancellation and deadlines
-- **File convention** — tests live next to implementation: `get_counter.service.go` + `get_counter.service_test.go`
+- **Access token** — 15 min default, sent as `Authorization: Bearer <token>`.
+- **Refresh token** — 7 days default, exchanged at `/api/auth/refresh`.
+- Tokens are returned in the response body, not set as cookies, so there is no CSRF
+  token to manage. Store them where your client can keep them out of reach of
+  injected scripts.
+- Access and refresh tokens are signed with **separate secrets**, so a refresh
+  token cannot be presented as an access token.
 
-For the full TDD guide with step-by-step instructions, see [`internal/service/README.md`](internal/service/README.md).
+Security properties worth knowing about, because they shape how the code is written:
+
+- **Refresh tokens are stored hashed.** Only the SHA-256 digest is written to the
+  database ([hash.go](internal/service/token/hash.go)), so a database leak yields
+  nothing replayable. Tokens are looked up by digest via a unique index.
+- **Rotation with reuse detection.** Each refresh consumes the old token. Replaying
+  a consumed token revokes *every* refresh token for that user, on the assumption
+  that a replayed token is a stolen one
+  ([refresh.service.go](internal/service/user/refresh.service.go)).
+- **Logout revokes everything**, not just the calling session, so a stolen refresh
+  token dies at logout.
+- **Login does not leak which emails exist.** An unknown email and a wrong password
+  return an identical response, and the unknown-email path still runs a bcrypt
+  comparison so the timing matches.
+- **Internal errors never reach the client.** Handlers map known sentinel errors
+  ([errors.go](internal/service/user/errors.go)) to statuses and answer everything
+  else with a generic 500, logging the real cause against the request ID.
+- **Passwords** are bcrypt-hashed and capped at 72 bytes, because bcrypt silently
+  ignores anything beyond that.
+- **Proxies are not trusted by default**, so `X-Forwarded-For` cannot be used to
+  spoof a client IP past the rate limiter. Set `TRUSTED_PROXIES` when you actually
+  run behind one.
+
+Middleware context keys, and the helpers that read them
+([auth.go](internal/api/middleware/auth.go)): `user_id`, `user_email`, `claims` via
+`GetUserIDFromContext(c)`, `GetEmailFromContext(c)`, `GetClaimsFromContext(c)`.
+`OptionalAuthMiddleware` populates the same keys but lets anonymous requests through.
+
+## Architecture
+
+Dependencies point inward only:
+
+```
+HTTP (api/) → Service (service/) → Repository (repository/) → Model (model/)
+```
+
+```
+cmd/server/main.go            Entry point: config, container, serve, graceful shutdown
+docs/openapi.yaml             API specification
+
+internal/
+├── api/
+│   ├── handler/              Bind + validate request, call service, map errors to status
+│   ├── middleware/           Auth, request ID, structured logging, recovery, rate limit
+│   └── router.go             Route registration
+├── service/                  Business logic; one package per domain
+│   ├── user/                 register, login, refresh, logout, sentinel errors
+│   ├── token/                JWT issue/validate, token hashing (no repository)
+│   └── health/               Liveness and dependency checks
+├── repository/
+│   ├── interfaces/           Contracts (*.repository_interface.go)
+│   ├── implementations/      GORM implementations, one package per domain
+│   └── mock/                 Generated gomock mocks
+├── model/
+│   ├── entity/               GORM models
+│   ├── request/              Input DTOs with `binding` validation tags
+│   └── response/             Output DTOs + the response envelope
+├── di/container.go           Wires repositories → services → handlers → router
+└── platform/                 Config, database, migrations, logger
+```
+
+Layer guides: [internal/](internal/README.md) ·
+[service/](internal/service/README.md) · [repository/](internal/repository/README.md) ·
+[model/](internal/model/README.md)
+
+### Conventions
+
+- **TDD** — write the test first; see [internal/service/README.md](internal/service/README.md).
+- **File naming** — `<action>.<layer>.go`, e.g. `login.service.go`, `find_by_id.gorm.go`.
+- **Tests** — `<action>.<layer>_test.go`, table-driven, `gomock` for repositories.
+- **Context** — every service and repository method takes a `context.Context`.
+- **Interfaces** — services depend on repository interfaces, never concrete types.
+- **DTOs** — requests in, responses out; entities stay behind the repository layer.
+- **Errors** — services return sentinel errors for expected failures and wrap
+  everything else with `fmt.Errorf("...: %w", err)`.
+- **Imports** — three groups: stdlib, third-party, then this module.
+
+## Configuration
+
+Copy `env.example` to `.env`; it documents every variable with its default. The ones
+that matter most:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `DEV_MODE` | `false` | `true` enables fallback secrets, Gin debug, SQL logging |
+| `DATABASE_TYPE` | `sqlite` | or `postgres` |
+| `DATABASE_DSN` | `dev.db` | file path, or a Postgres connection string |
+| `DATABASE_AUTO_MIGRATE` | `true` | set `false` in production |
+| `JWT_ACCESS_SECRET` | — | **required** when `DEV_MODE=false`, ≥32 chars |
+| `JWT_REFRESH_SECRET` | — | **required**, ≥32 chars, must differ from the above |
+| `ALLOWED_ORIGINS` | `http://localhost:5173` | comma-separated CORS origins |
+| `TRUSTED_PROXIES` | *(none)* | set only when behind a proxy you control |
+| `RATE_LIMIT_LOGIN_ATTEMPTS` | `10` | per IP per window; `0` disables |
+| `LOG_LEVEL` | *(auto)* | `debug` in dev mode, `info` otherwise |
+
+## Database
+
+SQLite (default, pure Go — no CGO) or PostgreSQL. Switch with:
+
+```bash
+DATABASE_TYPE=postgres
+DATABASE_DSN="host=localhost user=postgres password=postgres dbname=app port=5432 sslmode=disable"
+```
+
+Schema is applied by [platform.Migrate](internal/platform/migrate.go) at startup when
+`DATABASE_AUTO_MIGRATE=true`. Register new entities in `migrationModels` there.
+
+**AutoMigrate is not a migration tool.** It adds columns and indexes but never
+alters or drops them, and it has no version history or rollback. For anything
+deployed, set `DATABASE_AUTO_MIGRATE=false` and manage the schema with
+[golang-migrate](https://github.com/golang-migrate/migrate),
+[atlas](https://atlasgo.io), or [goose](https://github.com/pressly/goose).
+
+Expired refresh tokens are swept hourly by a janitor goroutine started in
+[main.go](cmd/server/main.go); expired rows are never read, so without it the table
+would only grow.
+
+## Observability
+
+- **Structured logs** via `log/slog` — text in dev mode, JSON otherwise. One line
+  per request with method, path, status, latency, client IP, and request ID.
+- **Request IDs** — every response carries `X-Request-ID`. Send your own header and
+  it is reused, so a client-reported failure can be traced to its log lines.
+- **Panics** are recovered, logged with a stack trace, and answered as a generic 500.
+- **Probes** — `/api/health` for liveness, `/api/health/ready` for readiness. Point
+  your orchestrator's liveness probe at the former and readiness at the latter, so a
+  brief database outage removes the instance from rotation instead of restarting it.
+
+## Testing
+
+```bash
+make test           # -race, coverage
+make test-coverage  # coverage.html
+```
+
+Coverage spans every layer: service logic with mocked repositories, middleware and
+handlers over `httptest`, and a full register → login → protected route → rotate →
+logout flow against a real SQLite database in
+[internal/di/container_test.go](internal/di/container_test.go).
+
+## Docker
+
+```bash
+make docker-build   # Multi-stage build → distroless, non-root, static binary
+make docker-up      # API + Postgres, API waits for the database to be healthy
+make docker-down
+```
+
+The runtime image is `distroless/static` with no shell, so configure the readiness
+probe in your orchestrator against `/api/health/ready` rather than a `HEALTHCHECK`.
+
+## CI
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) runs on push and pull request:
+formatting, `go mod tidy` check, vet, `go test -race -cover`, build, golangci-lint,
+and a Docker build. Reproduce it locally with `make check`.
+
+## Production checklist
+
+- [ ] `DEV_MODE=false`. Startup then **fails** unless both JWT secrets are set, are
+      at least 32 characters, differ from each other, and are not the built-in dev
+      values ([container.go](internal/di/container.go)).
+- [ ] Generate secrets properly: `openssl rand -base64 48`.
+- [ ] `DATABASE_TYPE=postgres` with a real DSN and TLS.
+- [ ] `DATABASE_AUTO_MIGRATE=false`, schema managed by a migration tool.
+- [ ] `ALLOWED_ORIGINS` set to your actual origins, not the default.
+- [ ] `TRUSTED_PROXIES` set if and only if you run behind a proxy.
+- [ ] Terminate TLS at the load balancer or a reverse proxy.
+- [ ] Rate limiting is in-process, so each replica counts separately. Behind more
+      than one instance, move it to Redis or your gateway before treating it as a
+      hard guarantee.
 
 ## Credits
 

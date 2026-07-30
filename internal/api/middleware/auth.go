@@ -3,34 +3,31 @@ package middleware
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/service/csrf"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/service/token"
+
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/response"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/service/token"
 )
 
 const (
-	AccessTokenCookie  = "access_token"
-	RefreshTokenCookie = "refresh_token"
-	UserIDCtxKey       = "user_id"
-	UserEmailCtxKey    = "user_email"
-	ClaimsCtxKey       = "claims"
+	UserIDCtxKey    = "user_id"
+	UserEmailCtxKey = "user_email"
+	ClaimsCtxKey    = "claims"
 )
 
-// AuthMiddleware validates JWT token from HTTP-only cookie
+// AuthMiddleware validates JWT token from Authorization: Bearer header
 func AuthMiddleware(tokenService token.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Get token from HTTP-only cookie
-		tokenStr, err := c.Cookie(AccessTokenCookie)
-		if err != nil {
+		tokenStr := extractBearerToken(c)
+		if tokenStr == "" {
 			c.JSON(http.StatusUnauthorized, response.Err("Missing authentication token"))
 			c.Abort()
 			return
 		}
 
-		// Validate token
 		claims, err := tokenService.ValidateAccessToken(tokenStr)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, response.Err("Invalid or expired token"))
@@ -38,7 +35,6 @@ func AuthMiddleware(tokenService token.TokenService) gin.HandlerFunc {
 			return
 		}
 
-		// Store user info in context
 		c.Set(UserIDCtxKey, claims.UserID.String())
 		c.Set(UserEmailCtxKey, claims.Email)
 		c.Set(ClaimsCtxKey, claims)
@@ -47,24 +43,21 @@ func AuthMiddleware(tokenService token.TokenService) gin.HandlerFunc {
 	}
 }
 
-// OptionalAuthMiddleware validates JWT but doesn't require it
+// OptionalAuthMiddleware validates JWT from Authorization header but doesn't require it
 func OptionalAuthMiddleware(tokenService token.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Try to get token from HTTP-only cookie
-		tokenStr, err := c.Cookie(AccessTokenCookie)
-		if err != nil {
+		tokenStr := extractBearerToken(c)
+		if tokenStr == "" {
 			c.Next()
 			return
 		}
 
-		// Validate token
 		claims, err := tokenService.ValidateAccessToken(tokenStr)
 		if err != nil {
 			c.Next()
 			return
 		}
 
-		// Store user info in context
 		c.Set(UserIDCtxKey, claims.UserID.String())
 		c.Set(UserEmailCtxKey, claims.Email)
 		c.Set(ClaimsCtxKey, claims)
@@ -73,27 +66,17 @@ func OptionalAuthMiddleware(tokenService token.TokenService) gin.HandlerFunc {
 	}
 }
 
-// CSRFMiddleware validates CSRF tokens for state-changing operations
-func CSRFMiddleware(csrfService csrf.CSRFService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// Only validate for state-changing operations
-		switch c.Request.Method {
-		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
-			csrfToken := c.GetHeader("X-CSRF-Token")
-			if csrfToken == "" {
-				c.JSON(http.StatusForbidden, response.Err("Missing CSRF token"))
-				c.Abort()
-				return
-			}
-			if !csrfService.ValidateToken(csrfToken) {
-				c.JSON(http.StatusForbidden, response.Err("Invalid CSRF token"))
-				c.Abort()
-				return
-			}
-		}
-
-		c.Next()
+// extractBearerToken parses the Authorization header and returns the raw token string.
+func extractBearerToken(c *gin.Context) string {
+	header := c.GetHeader("Authorization")
+	if header == "" {
+		return ""
 	}
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
 }
 
 // GetUserIDFromContext extracts user ID from context
@@ -111,20 +94,29 @@ func GetUserIDFromContext(c *gin.Context) (uuid.UUID, error) {
 	return id, nil
 }
 
-// GetEmailFromContext extracts email from context
+// GetEmailFromContext extracts email from context, or "" when unauthenticated.
 func GetEmailFromContext(c *gin.Context) string {
 	email, exists := c.Get(UserEmailCtxKey)
 	if !exists {
 		return ""
 	}
-	return email.(string)
+	s, ok := email.(string)
+	if !ok {
+		return ""
+	}
+	return s
 }
 
-// GetClaimsFromContext extracts token claims from context
+// GetClaimsFromContext extracts token claims from context, or nil when
+// unauthenticated.
 func GetClaimsFromContext(c *gin.Context) *token.TokenClaims {
-	claims, exists := c.Get(ClaimsCtxKey)
+	value, exists := c.Get(ClaimsCtxKey)
 	if !exists {
 		return nil
 	}
-	return claims.(*token.TokenClaims)
+	claims, ok := value.(*token.TokenClaims)
+	if !ok {
+		return nil
+	}
+	return claims
 }

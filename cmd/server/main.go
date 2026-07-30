@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,55 +12,124 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/di"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/platform"
+
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/di"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/platform"
 )
 
+// tokenPurgeInterval is how often expired refresh tokens are swept from the
+// database. Expired rows are harmless but unbounded, so an hourly pass is plenty.
+const tokenPurgeInterval = time.Hour
+
 func main() {
+	if err := run(); err != nil {
+		slog.Error("fatal error", slog.Any("error", err))
+		os.Exit(1)
+	}
+}
+
+// run wires up and serves the application, returning any startup or shutdown
+// error. Keeping it separate from main means every deferred cleanup still runs —
+// os.Exit in main would skip them.
+func run() error {
 	// Load environment variables from .env file if it exists
 	_ = godotenv.Load()
 
-	// Load configuration
 	cfg := platform.NewConfig()
 
-	// Create dependency container
 	container, err := di.NewContainer(cfg)
 	if err != nil {
-		log.Fatalf("failed to initialize application: %v", err)
+		return fmt.Errorf("initializing application: %w", err)
 	}
-	r := container.Router
+	logger := container.Logger
 
-	// Create HTTP server
+	defer func() {
+		if err := platform.CloseDatabase(container.DB); err != nil {
+			logger.Error("closing database", slog.Any("error", err))
+		}
+	}()
+
+	// Signal context: cancelled on SIGINT/SIGTERM, which both stops the janitor
+	// and triggers graceful shutdown below.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	purgeDone := startTokenJanitor(ctx, container, logger)
+
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      r,
+		Handler:      container.Router,
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
 	}
 
-	// Start server in a goroutine
+	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("Starting server on %s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server error: %v", err)
+		logger.Info("starting server",
+			slog.String("addr", addr),
+			slog.Bool("dev_mode", cfg.Auth.DevMode),
+		)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+			return
+		}
+		serverErr <- nil
+	}()
+
+	// Wait for either a signal or the server falling over on its own.
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			return fmt.Errorf("server error: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		logger.Info("shutdown signal received")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("server shutdown: %w", err)
+	}
+	<-purgeDone
+
+	logger.Info("shutdown complete")
+	return nil
+}
+
+// startTokenJanitor periodically deletes expired refresh tokens until ctx is
+// cancelled. The returned channel closes once the loop has stopped.
+func startTokenJanitor(ctx context.Context, container *di.Container, logger *slog.Logger) <-chan struct{} {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		ticker := time.NewTicker(tokenPurgeInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				deleted, err := container.Services.User.PurgeExpiredRefreshTokens(ctx)
+				if err != nil {
+					if !errors.Is(err, context.Canceled) {
+						logger.Error("purging expired refresh tokens", slog.Any("error", err))
+					}
+					continue
+				}
+				if deleted > 0 {
+					logger.Info("purged expired refresh tokens", slog.Int64("count", deleted))
+				}
+			}
 		}
 	}()
 
-	// Setup graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	<-sigChan
-
-	// Graceful shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("server shutdown error: %v", err)
-	}
-
-	log.Println("Server shutdown complete")
+	return done
 }

@@ -4,7 +4,8 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
 )
 
 // Update updates a user in GORM

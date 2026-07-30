@@ -120,7 +120,7 @@ func TestGenerateRefreshTokenClaimsExpiry(t *testing.T) {
 	})
 
 	now := time.Now()
-	if claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(now) {
+	if claims.ExpiresAt == nil || claims.ExpiresAt.Before(now) {
 		t.Errorf("token already expired")
 	}
 	if claims.IssuedAt != nil {
@@ -149,7 +149,7 @@ func TestGenerateRefreshTokenIssuer(t *testing.T) {
 		return []byte("refresh-secret"), nil
 	})
 
-	if claims.Issuer != "go-vite-react" {
-		t.Errorf("expected issuer 'go-vite-react', got %s", claims.Issuer)
+	if claims.Issuer != DefaultIssuer {
+		t.Errorf("expected issuer %s, got %s", DefaultIssuer, claims.Issuer)
 	}
 }

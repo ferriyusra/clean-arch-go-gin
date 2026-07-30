@@ -113,7 +113,7 @@ func TestCheckMultipleCalls(t *testing.T) {
 					t.Errorf("call %d: unexpected error: %v", i+1, err)
 				}
 				if result == nil {
-					t.Errorf("call %d: expected non-nil result", i+1)
+					t.Fatalf("call %d: expected non-nil result", i+1)
 				}
 				if result.Status != "ok" {
 					t.Errorf("call %d: expected status ok, got %s", i+1, result.Status)

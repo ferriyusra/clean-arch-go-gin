@@ -10,7 +10,9 @@ type GetUser struct {
 }
 
 type LoginResponse struct {
-	User GetUser `json:"user"`
+	User         GetUser `json:"user"`
+	AccessToken  string  `json:"accessToken"`
+	RefreshToken string  `json:"refreshToken"`
 }
 
 type RegisterResponse struct {
@@ -18,9 +20,6 @@ type RegisterResponse struct {
 }
 
 type RefreshResponse struct {
-	Message string `json:"message"`
-}
-
-type CSRFTokenResponse struct {
-	Token string `json:"token"`
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
 }

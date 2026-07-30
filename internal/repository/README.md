@@ -61,7 +61,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
 )
 
 // UserRepository defines the interface for user data access
@@ -106,7 +106,7 @@ package mock
 import (
 	context "context"
 	gomock "github.com/golang/mock/gomock"
-	entity "github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	entity "github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
 	uuid "github.com/google/uuid"
 )
 
@@ -139,8 +139,8 @@ Create `internal/repository/implementations/user/user.gorm.go`:
 package user
 
 import (
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/interfaces"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/repository/interfaces"
 	"gorm.io/gorm"
 )
 
@@ -155,26 +155,26 @@ type UserModel = entity.UserEntity
 // Verify interface implementation
 var _ interfaces.UserRepository = (*GORMUserRepository)(nil)
 
-// NewGORMUserRepository creates a new GORM user repository
-func NewGORMUserRepository(db *gorm.DB) (interfaces.UserRepository, error) {
-	// Auto-migrate the schema
-	if err := db.AutoMigrate(&UserModel{}); err != nil {
-		return nil, err
-	}
-
+// NewGORMUserRepository creates a new GORM user repository.
+//
+// Schema migration is not performed here — see platform.Migrate.
+func NewGORMUserRepository(db *gorm.DB) *GORMUserRepository {
 	return &GORMUserRepository{
 		db: db,
-	}, nil
+	}
 }
 ```
 
 **Key Points:**
-- Name struct `GORM<Name>Repository` 
-- Embed `*gorm.DB` for database access
+- Name struct `GORM<Name>Repository`
+- Hold a `*gorm.DB` for database access
 - Create alias `<Name>Model = entity.<Name>Entity`
 - Add interface verification: `var _ interfaces.UserRepository = (*GORMUserRepository)(nil)`
-- Handle schema migrations in constructor
-- Return interface type, not concrete type
+- **Do not migrate in the constructor.** Schema lives in `migrationModels` in
+  [`platform/migrate.go`](../platform/migrate.go), applied once at startup. Migrating
+  per-repository re-ran DDL on every construction, gave the constructor a failure mode
+  it did not need, and scattered the schema across packages.
+- The constructor cannot fail, so return the concrete type with no `error`
 
 **Step 4b: Implement individual methods**
 
@@ -189,7 +189,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
 )
 
 // Create creates a new user in the database
@@ -224,7 +224,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
 	"gorm.io/gorm"
 )
 
@@ -257,7 +257,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
 )
 
 // Update updates an existing user
@@ -349,35 +349,53 @@ type UserEntity struct {
 }
 ```
 
-### 4. Use Soft Deletes for Data Retention
+### 4. Choose Soft vs Hard Deletes Deliberately
 
-Include `DeletedAt` field for auditing and recovery:
+Adding a `DeletedAt gorm.DeletedAt` field silently changes what `Delete` means:
 
 ```go
-// Soft delete
-db.Delete(&user) // Sets DeletedAt, doesn't remove record
+// With DeletedAt on the entity:
+db.Delete(&user)        // UPDATE — sets DeletedAt, the row stays
+db.Find(&users)         // excludes soft-deleted rows automatically
+db.Unscoped().Delete(&user)  // actually removes the row
 
-// Query excludes soft-deleted records by default
-var users []UserEntity
-db.Find(&users) // Only returns non-deleted records
-
-// Force hard delete if needed
-db.Unscoped().Delete(&user) // Physically removes record
+// Without DeletedAt:
+db.Delete(&user)        // DELETE — the row is gone
 ```
 
-### 5. Return Interface Types, Not Concrete Types
+`UserEntity` keeps `DeletedAt`, because accounts are worth retaining and recovering.
+
+`RefreshTokenEntity` deliberately does **not**, for two reasons:
+
+1. **Revocation must be permanent.** A "deleted" credential that is still in the table
+   is a credential someone can restore.
+2. **Soft deletes collide with unique indexes.** A soft-deleted row still occupies its
+   slot in `uniqueIndex`, so re-inserting the same value fails with a constraint error
+   even though the record looks gone at the application level.
+
+Rule of thumb: soft delete business records, hard delete credentials and tokens.
+
+### 5. Accept Interfaces, Return Structs
+
+Constructors return the concrete type; it is the *consumer* that depends on an
+interface. Services take `interfaces.UserRepository`, so they remain mockable, while
+the constructor stays free to expose extra methods without widening the contract.
 
 ```go
-// ✅ Good
-func NewGORMUserRepository(db *gorm.DB) (interfaces.UserRepository, error) {
-	return &GORMUserRepository{db: db}, nil
-}
-
-// ❌ Bad
+// ✅ Good — concrete return, no error the caller cannot act on
 func NewGORMUserRepository(db *gorm.DB) *GORMUserRepository {
 	return &GORMUserRepository{db: db}
 }
+
+// The compile-time check keeps the contract honest:
+var _ interfaces.UserRepository = (*GORMUserRepository)(nil)
+
+// ✅ The dependency on the interface belongs here
+func NewUserService(repo interfaces.UserRepository) UserService { ... }
 ```
+
+Returning an interface hides the concrete type from callers for no benefit and makes
+the zero value a typed nil, which compares `!= nil` and causes confusing panics.
 
 ### 6. Use GORM with Context
 
@@ -423,38 +441,40 @@ implementations/user/
 
 ## Example Repository Structure
 
+The tree as it stands, plus where a new `product` domain would go:
+
 ```
 internal/repository/
 ├── interfaces/
-│   ├── counter.repository_interface.go
-│   ├── email.repository_interface.go
-│   ├── message.repository_interface.go
-│   └── user.repository_interface.go
+│   ├── refresh_token.repository_interface.go
+│   ├── user.repository_interface.go
+│   └── product.repository_interface.go      # ← your new contract
 ├── implementations/
-│   ├── counter/
-│   │   ├── counter.gorm.go
-│   │   ├── get_counter.gorm.go
-│   │   └── increment_counter.gorm.go
-│   ├── email/
-│   │   ├── email.gorm.go
+│   ├── refresh_token/
+│   │   ├── refresh_token.gorm.go            # Constructor and struct
 │   │   ├── create.gorm.go
-│   │   └── find_by_id.gorm.go
-│   ├── message/
-│   │   ├── message.gorm.go
-│   │   └── get_message.gorm.go
-│   └── user/
-│       ├── user.gorm.go
-│       ├── create.gorm.go
-│       ├── find_by_id.gorm.go
-│       ├── find_all.gorm.go
-│       ├── update.gorm.go
-│       └── delete.gorm.go
+│   │   ├── find_by_token_hash.gorm.go       # Looked up by digest, never raw token
+│   │   ├── delete_by_token_hash.gorm.go
+│   │   ├── delete_by_user_id.gorm.go
+│   │   └── delete_expired.gorm.go
+│   ├── user/
+│   │   ├── user.gorm.go
+│   │   ├── create.gorm.go
+│   │   ├── find_by_id.gorm.go
+│   │   ├── find_by_email.gorm.go
+│   │   ├── update.gorm.go
+│   │   └── delete.gorm.go
+│   └── product/                             # ← your new implementation
+│       ├── product.gorm.go
+│       └── ...
 └── mock/
-    ├── counter.repository_mock.go      # Generated
-    ├── email.repository_mock.go        # Generated
-    ├── message.repository_mock.go      # Generated
-    └── user.repository_mock.go         # Generated
+    ├── refresh_token.repository_mock.go      # Generated — do not edit
+    ├── user.repository_mock.go               # Generated — do not edit
+    └── product.repository_mock.go            # Generated by `make repository-mocks`
 ```
+
+One file per action, named after the action. The file name matches the method name in
+snake_case, so `FindByEmail` lives in `find_by_email.gorm.go`.
 
 ## Common Patterns
 
@@ -589,24 +609,35 @@ mockgen -source=internal/repository/interfaces/user.repository_interface.go \
   -package=mock
 ```
 
-### GORM Migration Errors
+### Table Missing / GORM Migration Errors
 
-If auto-migration fails:
+**"no such table" or "relation does not exist"** almost always means the entity was
+never registered for migration. Repositories do not migrate — add it to
+`migrationModels` in [`platform/migrate.go`](../platform/migrate.go):
 
 ```go
-// Check entity struct tags
-type UserEntity struct {
-	ID uuid.UUID `gorm:"primaryKey"` // Required for GORM
-}
-
-// Manual migration in constructor
-func NewGORMUserRepository(db *gorm.DB) (interfaces.UserRepository, error) {
-	if err := db.AutoMigrate(&UserModel{}); err != nil {
-		return nil, fmt.Errorf("failed to migrate schema: %w", err)
-	}
-	return &GORMUserRepository{db: db}, nil
+var migrationModels = []any{
+	&entity.UserEntity{},
+	&entity.RefreshTokenEntity{},
+	&entity.ProductEntity{}, // ← add yours here
 }
 ```
+
+Then check the struct tags, since GORM needs an explicit primary key:
+
+```go
+type ProductEntity struct {
+	ID uuid.UUID `gorm:"primaryKey"` // Required
+}
+```
+
+**A column changed type but the database did not.** `AutoMigrate` only adds columns and
+indexes — it never alters or drops them. In development, delete `dev.db` and restart.
+Anywhere else, use a real migration tool; that is what `DATABASE_AUTO_MIGRATE=false` is
+for.
+
+**Migration is not running at all.** Check `DATABASE_AUTO_MIGRATE` — it defaults to
+true, but is expected to be false in production.
 
 ### Context Not Propagating
 

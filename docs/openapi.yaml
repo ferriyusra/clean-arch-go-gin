@@ -1,0 +1,537 @@
+openapi: 3.1.0
+
+info:
+  title: Gin Clean Architecture Boilerplate API
+  version: 1.0.0
+  description: |
+    JWT-authenticated REST API.
+
+    **Authentication.** `POST /api/auth/login` returns a short-lived access token
+    and a long-lived refresh token in the response body. Send the access token as
+    `Authorization: Bearer <token>` on protected endpoints. Tokens are not set as
+    cookies, so no CSRF token is required.
+
+    **Refresh rotation.** `POST /api/auth/refresh` consumes the refresh token and
+    returns a new pair. Replaying a consumed refresh token revokes every refresh
+    token the user holds and forces a fresh login — a reused token is treated as
+    a stolen one.
+
+    **Response envelope.** Every response is wrapped in the same object: `success`,
+    `message`, optional `data`, optional `errors` (field name → message), and
+    optional `meta` for pagination.
+
+    **Rate limiting.** The `/api/auth/*` endpoints are limited per client IP and
+    answer `429` with a `Retry-After` header once the window is exhausted.
+
+    **Correlation.** Every response carries an `X-Request-ID` header. Send your own
+    to have it reused in the server logs.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Health
+    description: Liveness and readiness probes
+  - name: Auth
+    description: Registration, login, token rotation, and session teardown
+
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      description: |
+        Answers 200 as long as the process is running. Touches no dependencies, so
+        a briefly unreachable database will not cause a restart loop.
+      security: []
+      responses:
+        "200":
+          description: The process is alive.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                success: true
+                message: Service is healthy
+                data:
+                  status: ok
+                  message: Service is healthy
+                  details:
+                    timestamp: "2026-07-30T11:29:10+07:00"
+
+  /api/health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      description: |
+        Verifies every dependency (currently the database) and answers 503 when any
+        is unhealthy, so a broken instance is removed from the load balancer.
+      security: []
+      responses:
+        "200":
+          description: Every dependency is healthy.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                success: true
+                message: All dependencies healthy
+                data:
+                  status: ok
+                  message: All dependencies healthy
+                  details:
+                    database:
+                      status: healthy
+        "503":
+          description: At least one dependency is unhealthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                success: false
+                message: 1 dependency checks failed
+                data:
+                  status: degraded
+                  message: 1 dependency checks failed
+                  details:
+                    database:
+                      status: unhealthy
+                      error: "pinging database: sql: database is closed"
+
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new account
+      description: |
+        Creates an account and returns the new user. No tokens are issued — call
+        `/api/auth/login` next.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Account created.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, const: true }
+                  message: { type: string, examples: [Registration successful] }
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "409":
+          description: The email is already registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                message: email is already registered
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in and receive a token pair
+      description: |
+        A wrong password and an unknown email produce the identical 401 body, so
+        the endpoint cannot be used to discover which addresses have accounts.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, const: true }
+                  message: { type: string, examples: [Login successful] }
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/TokenPair"
+                      - type: object
+                        properties:
+                          user:
+                            $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          description: Invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                message: invalid email or password
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate the token pair
+      description: |
+        Consumes the supplied refresh token and issues a new pair. The old token is
+        invalid immediately afterwards. Replaying it revokes every refresh token
+        for that user.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: A new token pair.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, const: true }
+                  message: { type: string, examples: [Token refreshed] }
+                  data:
+                    $ref: "#/components/schemas/TokenPair"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          description: |
+            The token is malformed, expired, or was already consumed or revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                revoked:
+                  summary: Already consumed or revoked
+                  value:
+                    success: false
+                    message: refresh token has been revoked
+                expired:
+                  summary: Past its expiry
+                  value:
+                    success: false
+                    message: refresh token has expired
+                invalid:
+                  summary: Malformed or wrongly signed
+                  value:
+                    success: false
+                    message: invalid refresh token
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the authenticated user
+      responses:
+        "200":
+          description: The current user.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, const: true }
+                  message: { type: string, examples: [User retrieved] }
+                  data:
+                    $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The token is valid but the account no longer exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                message: user not found
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out
+      description: |
+        Revokes every refresh token for the user, so a stolen refresh token stops
+        working at logout and not just the session that called it. Access tokens
+        already issued remain valid until they expire.
+      responses:
+        "200":
+          description: Logged out.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+              example:
+                success: true
+                message: Logged out successfully
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The access token returned by login or refresh.
+
+  headers:
+    XRequestID:
+      description: Correlation ID for this request; reused from the inbound header when present.
+      schema:
+        type: string
+      example: a8ead2bf-be55-4bbe-a2bb-8f45cca76f83
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          examples: ["8214d8fb-a9a4-4296-8f89-a4a31ac69c74"]
+        email:
+          type: string
+          format: email
+          examples: [user@example.com]
+        name:
+          type: string
+          examples: [Jane Doe]
+
+    TokenPair:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: Bearer token for protected endpoints. Default TTL 15 minutes.
+          examples: ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."]
+        refreshToken:
+          type: string
+          description: Single-use token for rotation. Default TTL 7 days.
+          examples: ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."]
+
+    RegisterRequest:
+      type: object
+      required: [email, password, name]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        password:
+          type: string
+          minLength: 8
+          maxLength: 72
+          description: |
+            Capped at 72 bytes because bcrypt ignores anything beyond that — a
+            longer password would be only partially verified at login.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+      examples:
+        - email: user@example.com
+          password: supersecret123
+          name: Jane Doe
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        password:
+          type: string
+          maxLength: 72
+      examples:
+        - email: user@example.com
+          password: supersecret123
+
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+      examples:
+        - refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    HealthResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        message: { type: string }
+        data:
+          $ref: "#/components/schemas/HealthStatus"
+
+    SuccessResponse:
+      type: object
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+        data: { description: Endpoint-specific payload; omitted when empty. }
+        meta:
+          $ref: "#/components/schemas/Meta"
+
+    ErrorResponse:
+      type: object
+      properties:
+        success: { type: boolean, const: false }
+        message: { type: string }
+        errors:
+          type: object
+          description: Field name → message. Present only on validation failures.
+          additionalProperties:
+            type: string
+
+    Meta:
+      type: object
+      description: Pagination metadata, present only on paginated collections.
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+
+  responses:
+    ValidationFailed:
+      description: |
+        The body failed validation, or could not be parsed at all. Parse failures
+        carry no `errors` object, just the generic message.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            fieldErrors:
+              summary: Field-level validation failures
+              value:
+                success: false
+                message: Validation failed
+                errors:
+                  email: Must be a valid email address
+                  password: Must be at least 8 characters
+                  name: name is required
+            unparseable:
+              summary: Malformed JSON
+              value:
+                success: false
+                message: Invalid request body
+
+    Unauthorized:
+      description: The access token is missing, malformed, or expired.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            missing:
+              value:
+                success: false
+                message: Missing authentication token
+            invalid:
+              value:
+                success: false
+                message: Invalid or expired token
+
+    TooManyRequests:
+      description: The per-IP rate limit for the auth endpoints was exceeded.
+      headers:
+        Retry-After:
+          description: Seconds until the window resets.
+          schema:
+            type: integer
+          example: 47
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            success: false
+            message: Too many requests, please try again later
+
+    InternalError:
+      description: |
+        An unexpected failure. The message is always generic — internal detail is
+        written to the server logs under the request's `X-Request-ID` instead.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            success: false
+            message: Internal server error
+
+security:
+  - bearerAuth: []

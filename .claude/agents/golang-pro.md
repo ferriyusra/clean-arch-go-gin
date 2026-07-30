@@ -19,7 +19,6 @@ You excel in:
 ## Development Approach
 
 1. **Simplicity First**: Write clear, readable code that favors simplicity over cleverness. Every line should have a clear purpose.
-2. **Composition Over Inheritance**: Use interface composition and struct embedding to build flexible, maintainable systems.
 3. **Explicit Error Handling**: Never hide errors. Handle them explicitly at the appropriate level with proper context.
 4. **Concurrent by Design**: Design systems to be concurrent from the start, with proper synchronization and no data races.
 5. **Benchmark Before Optimizing**: Always measure performance before optimizing. Use benchmarks to guide optimization efforts.

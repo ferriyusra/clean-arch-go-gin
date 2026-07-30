@@ -6,25 +6,21 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/model/entity"
+	"github.com/ferriyusra/boilerplate-golang-gin/internal/service/token"
 )
 
-// StoreRefreshToken persists a refresh token in the database
-func (s *userService) StoreRefreshToken(ctx context.Context, userID uuid.UUID, tokenStr string, expiresAt time.Time) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	token := entity.RefreshTokenEntity{
+// storeRefreshToken persists the hash of a refresh token.
+// The raw token is returned to the client but never written to the database.
+func (s *userService) storeRefreshToken(ctx context.Context, userID uuid.UUID, rawToken string) error {
+	record := entity.RefreshTokenEntity{
 		ID:        uuid.New(),
 		UserID:    userID,
-		Token:     tokenStr,
-		ExpiresAt: expiresAt,
+		TokenHash: token.HashToken(rawToken),
+		ExpiresAt: time.Now().Add(s.tokenService.RefreshTokenExpiry()),
 	}
-
-	if err := s.refreshTokenRepository.Create(ctx, token); err != nil {
+	if err := s.refreshTokenRepository.Create(ctx, record); err != nil {
 		return fmt.Errorf("storing refresh token: %w", err)
 	}
 	return nil
