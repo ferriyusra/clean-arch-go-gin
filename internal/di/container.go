@@ -1,18 +1,24 @@
 package di
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"gorm.io/gorm"
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/api"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/api/handler"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/api/middleware"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/platform"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/tracing"
 
 	counterRepo "github.com/ferriyusra/clean-arch-go-gin/internal/repository/implementations/counter"
 	messageRepo "github.com/ferriyusra/clean-arch-go-gin/internal/repository/implementations/message"
@@ -35,6 +41,12 @@ const (
 	devCSRFSecret    = "dev-csrf-secret-DO-NOT-USE-IN-PRODUCTION"
 )
 
+// tracerShutdownTimeout bounds the final span flush so a wedged collector
+// cannot hold up process exit.
+const tracerShutdownTimeout = 5 * time.Second
+
+const ()
+
 // Container holds all application dependencies
 type Container struct {
 	Config   *platform.Config
@@ -42,7 +54,8 @@ type Container struct {
 	Services *Services
 	Logger   *slog.Logger
 
-	db *gorm.DB
+	db             *gorm.DB
+	tracerShutdown tracing.ShutdownFunc
 	// ownsDB is false when the database was injected through the config (as
 	// tests do), in which case Close must not shut it down.
 	ownsDB bool
@@ -80,6 +93,22 @@ func NewContainer(cfg *platform.Config, logger *slog.Logger) (*Container, error)
 		return nil, err
 	}
 
+	// Tracing is installed before the router so that otelgin picks up the real
+	// tracer provider rather than the no-op one it would capture otherwise.
+	tracerShutdown, err := tracing.Init(context.Background(), tracing.Config{
+		Enabled:        cfg.Tracing.Enabled,
+		ServiceName:    cfg.Tracing.ServiceName,
+		ServiceVersion: cfg.Tracing.ServiceVersion,
+		Environment:    cfg.Tracing.Environment,
+		Exporter:       cfg.Tracing.Exporter,
+		Endpoint:       cfg.Tracing.Endpoint,
+		Insecure:       cfg.Tracing.Insecure,
+		SampleRatio:    cfg.Tracing.SampleRatio,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initializing tracing: %w", err)
+	}
+
 	accessSecret := orDefault(cfg.Auth.JWTAccessSecret, devAccessSecret)
 	refreshSecret := orDefault(cfg.Auth.JWTRefreshSecret, devRefreshSecret)
 	csrfSecret := orDefault(cfg.Auth.CSRFSecret, devCSRFSecret)
@@ -89,10 +118,10 @@ func NewContainer(cfg *platform.Config, logger *slog.Logger) (*Container, error)
 	db := cfg.Database.Gorm
 	ownsDB := false
 	if db == nil {
-		var err error
-		db, err = platform.InitializeDatabase(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("initializing database: %w", err)
+		var dbErr error
+		db, dbErr = platform.InitializeDatabase(cfg)
+		if dbErr != nil {
+			return nil, fmt.Errorf("initializing database: %w", dbErr)
 		}
 		cfg.Database.Gorm = db
 		ownsDB = true
@@ -150,12 +179,13 @@ func NewContainer(cfg *platform.Config, logger *slog.Logger) (*Container, error)
 	api.SetupFallbacks(router)
 
 	return &Container{
-		Config:   cfg,
-		Router:   router,
-		Services: services,
-		Logger:   logger,
-		db:       db,
-		ownsDB:   ownsDB,
+		Config:         cfg,
+		Router:         router,
+		Services:       services,
+		Logger:         logger,
+		db:             db,
+		ownsDB:         ownsDB,
+		tracerShutdown: tracerShutdown,
 	}, nil
 }
 
@@ -178,6 +208,18 @@ func newRouter(cfg *platform.Config, logger *slog.Logger) *gin.Engine {
 	// An empty list means "trust no proxy", so ClientIP reports the direct peer
 	// rather than a spoofable X-Forwarded-For value.
 	_ = r.SetTrustedProxies(cfg.Security.TrustedProxies)
+
+	// Tracing goes first: the span has to exist before RequestID can adopt its
+	// trace id, and before any later middleware can be attributed to it.
+	if cfg.Tracing.Enabled {
+		r.Use(otelgin.Middleware(cfg.Tracing.ServiceName,
+			otelgin.WithFilter(func(req *http.Request) bool {
+				// Health probes run every few seconds and would bury the real
+				// traffic in the trace store.
+				return !strings.HasPrefix(req.URL.Path, "/api/health")
+			}),
+		))
+	}
 
 	r.Use(middleware.RequestID(logger))
 	r.Use(middleware.Recovery())
@@ -206,12 +248,37 @@ func newRouter(cfg *platform.Config, logger *slog.Logger) *gin.Engine {
 }
 
 // Close releases resources the container owns. Safe to call more than once.
+// Close releases the resources the container owns. Safe to call more than once.
+//
+// The tracer is flushed before anything else: spans are batched, so exiting
+// without this drops whatever has not been exported yet, which usually includes
+// the spans for the requests that prompted the shutdown.
 func (c *Container) Close() error {
-	if c == nil || !c.ownsDB {
+	if c == nil {
 		return nil
 	}
-	c.ownsDB = false
-	return platform.CloseDatabase(c.db)
+
+	var errs []error
+
+	if c.tracerShutdown != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), tracerShutdownTimeout)
+		defer cancel()
+
+		if err := c.tracerShutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("shutting down tracing: %w", err))
+		}
+		c.tracerShutdown = nil
+	}
+
+	// An injected database belongs to whoever injected it, so it is left alone.
+	if c.ownsDB {
+		c.ownsDB = false
+		if err := platform.CloseDatabase(c.db); err != nil {
+			errs = append(errs, fmt.Errorf("closing database: %w", err))
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 func orDefault(value, fallback string) string {

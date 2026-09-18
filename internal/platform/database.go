@@ -9,6 +9,8 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/tracing"
 )
 
 // Supported values for DATABASE_TYPE.
@@ -56,6 +58,13 @@ func InitializeDatabase(cfg *Config) (*gorm.DB, error) {
 	sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
 	sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
 	sqlDB.SetConnMaxLifetime(cfg.Database.ConnMaxLifetime)
+
+	if cfg.Tracing.Enabled {
+		if err := db.Use(tracing.NewGormPlugin()); err != nil {
+			_ = CloseDatabase(db)
+			return nil, fmt.Errorf("installing database tracing: %w", err)
+		}
+	}
 
 	if err := pingWithRetry(db, pingAttempts, pingBackoff); err != nil {
 		_ = CloseDatabase(db)

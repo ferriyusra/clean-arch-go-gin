@@ -40,5 +40,16 @@ services:
     ports:
       - "8080:8080"
 
+  # Local trace viewer. Start it with: docker compose --profile tracing up
+  # Then open http://localhost:16686 and set OTEL_ENABLED=true on the app.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    profiles: [tracing]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+
 volumes:
   postgres-data:

@@ -200,3 +200,48 @@ func TestBodyLimitRejectsAnOversizedBody(t *testing.T) {
 
 	testutil.Equal(t, rec.Code, http.StatusRequestEntityTooLarge, "status")
 }
+
+// TestRequestIDRejectsUntrustworthyClientValues covers the hardening around a
+// client-supplied id: it is echoed on the response and written to every log
+// line for the request, so an unbounded or exotic value is a way to pollute the
+// logs of whoever is reading them.
+func TestRequestIDRejectsUntrustworthyClientValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		incoming string
+		accepted bool
+	}{
+		{name: "plain identifier", incoming: "abc-123_x.y", accepted: true},
+		{name: "a uuid", incoming: "3c33ab85-4e6d-4bbc-a2a4-7a03016869e6", accepted: true},
+		{name: "spaces", incoming: "not a valid id"},
+		{name: "path separators", incoming: "../../etc/passwd"},
+		{name: "percent-encoded newline", incoming: "id%0Ainjected"},
+		{name: "quotes that would break a log parser", incoming: "id\"}{"},
+		{name: "over the length cap", incoming: strings.Repeat("a", 129)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := testutil.NewEngine(t)
+			r.Use(middleware.RequestID(captureLogger(&bytes.Buffer{})))
+			r.GET("/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{}) })
+
+			req := testutil.JSONRequest(t, http.MethodGet, "/ping", nil)
+			req.Header.Set(middleware.RequestIDHeader, tt.incoming)
+
+			rec := testutil.Do(r, req)
+			got := rec.Header().Get(middleware.RequestIDHeader)
+
+			if tt.accepted {
+				testutil.Equal(t, got, tt.incoming, "the id is propagated")
+				return
+			}
+
+			// A rejected id is replaced, not cleaned: a sanitized value would
+			// still be attacker-shaped and would no longer match what the
+			// client believes it sent.
+			testutil.True(t, got != tt.incoming, "the id is not echoed back")
+			testutil.Equal(t, len(got), 36, "a fresh uuid is issued instead")
+		})
+	}
+}

@@ -17,6 +17,7 @@ type Config struct {
 	Auth     AuthConfig
 	Log      LogConfig
 	Security SecurityConfig
+	Tracing  TracingConfig
 }
 
 // AuthConfig holds authentication and security configuration
@@ -64,6 +65,21 @@ type RedisConfig struct {
 type LogConfig struct {
 	Level  string // debug | info | warn | error
 	Format string // json | text
+}
+
+// TracingConfig holds OpenTelemetry tracing configuration.
+//
+// Variable names follow the OpenTelemetry environment conventions so that an
+// operator who has configured another OTel service already knows them.
+type TracingConfig struct {
+	Enabled        bool
+	ServiceName    string
+	ServiceVersion string
+	Environment    string
+	Exporter       string
+	Endpoint       string
+	Insecure       bool
+	SampleRatio    float64
 }
 
 // SecurityConfig holds request-level hardening configuration
@@ -127,6 +143,16 @@ func NewConfig() *Config {
 			MaxRequestBody:   int64(getEnvInt("MAX_REQUEST_BODY_BYTES", 1<<20)),
 			TrustedProxies:   parseCSVEnv("TRUSTED_PROXIES", ""),
 		},
+		Tracing: TracingConfig{
+			Enabled:        getEnvBool("OTEL_ENABLED", false),
+			ServiceName:    getEnv("OTEL_SERVICE_NAME", "clean-arch-go-gin"),
+			ServiceVersion: getEnv("OTEL_SERVICE_VERSION", "dev"),
+			Environment:    getEnv("OTEL_ENVIRONMENT", defaultEnvironment(devMode)),
+			Exporter:       strings.ToLower(getEnv("OTEL_TRACES_EXPORTER", "otlp")),
+			Endpoint:       getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318"),
+			Insecure:       getEnvBool("OTEL_EXPORTER_OTLP_INSECURE", true),
+			SampleRatio:    getEnvFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
+		},
 	}
 }
 
@@ -142,6 +168,13 @@ func defaultLogFormat(devMode bool) string {
 		return "text"
 	}
 	return "json"
+}
+
+func defaultEnvironment(devMode bool) string {
+	if devMode {
+		return "development"
+	}
+	return "production"
 }
 
 func defaultDatabaseLogLevel(devMode bool) string {

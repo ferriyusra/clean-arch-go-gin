@@ -35,6 +35,13 @@ func run() error {
 
 	cfg := platform.NewConfig()
 
+	// The build stamps the version into this binary, which is more reliable
+	// than a value someone remembers to set in the environment, so it wins
+	// unless the environment was explicit.
+	if os.Getenv("OTEL_SERVICE_VERSION") == "" {
+		cfg.Tracing.ServiceVersion = version
+	}
+
 	logger := logging.New(logging.Options{
 		Level:  cfg.Log.Level,
 		Format: cfg.Log.Format,
@@ -72,6 +79,7 @@ func run() error {
 			"version", version,
 			"dev_mode", cfg.Auth.DevMode,
 			"database", cfg.Database.Type,
+			"tracing", cfg.Tracing.Enabled,
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err

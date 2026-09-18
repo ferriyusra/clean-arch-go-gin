@@ -28,6 +28,7 @@ func (c *Config) Validate() error {
 	problems = append(problems, c.validateDatabase()...)
 	problems = append(problems, c.validateAuth()...)
 	problems = append(problems, c.validateLog()...)
+	problems = append(problems, c.validateTracing()...)
 
 	if len(problems) == 0 {
 		return nil
@@ -175,4 +176,51 @@ func (c *Config) validateLog() []string {
 	}
 
 	return problems
+}
+
+func (c *Config) validateTracing() []string {
+	var problems []string
+
+	// Tracing is opt-in, so an unused block should not block startup.
+	if !c.Tracing.Enabled {
+		return problems
+	}
+
+	switch c.Tracing.Exporter {
+	case ExporterOTLP, ExporterConsole, "stdout":
+	default:
+		problems = append(problems, fmt.Sprintf(
+			"OTEL_TRACES_EXPORTER=%q is not supported (want %q or %q)",
+			c.Tracing.Exporter, ExporterOTLP, ExporterConsole))
+	}
+
+	if c.Tracing.Exporter == ExporterOTLP && c.Tracing.Endpoint == "" {
+		problems = append(problems, "OTEL_EXPORTER_OTLP_ENDPOINT must be set when the otlp exporter is used")
+	}
+
+	if c.Tracing.SampleRatio < 0 || c.Tracing.SampleRatio > 1 {
+		problems = append(problems, fmt.Sprintf(
+			"OTEL_TRACES_SAMPLER_ARG=%v is outside 0-1", c.Tracing.SampleRatio))
+	}
+
+	if c.Tracing.ServiceName == "" {
+		problems = append(problems, "OTEL_SERVICE_NAME must not be empty when tracing is enabled")
+	}
+
+	// Sending spans unencrypted off the machine leaks request metadata, and the
+	// insecure default is only there to make a local collector painless.
+	if !c.Auth.DevMode && c.Tracing.Insecure && c.Tracing.Exporter == ExporterOTLP &&
+		!isLoopbackEndpoint(c.Tracing.Endpoint) {
+		problems = append(problems, fmt.Sprintf(
+			"OTEL_EXPORTER_OTLP_INSECURE must be false outside DEV_MODE for a remote collector (%s)",
+			c.Tracing.Endpoint))
+	}
+
+	return problems
+}
+
+func isLoopbackEndpoint(endpoint string) bool {
+	return strings.Contains(endpoint, "localhost") ||
+		strings.Contains(endpoint, "127.0.0.1") ||
+		strings.Contains(endpoint, "[::1]")
 }
