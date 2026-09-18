@@ -1,0 +1,16 @@
+.git
+.github
+.claude
+bin/
+tmp/
+*.db
+*.log
+.env
+coverage.out
+coverage.html
+Dockerfile
+docker-compose.yml
+.dockerignore
+README.md
+AUTH.md
+CLAUDE.md
