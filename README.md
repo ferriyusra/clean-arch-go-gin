@@ -87,6 +87,7 @@ internal/
 │
 ├── apperr/               # the application error type and its sentinels
 ├── logging/              # slog setup + context-scoped logger
+├── tracing/              # OpenTelemetry setup, GORM spans, trace-id helpers
 ├── platform/             # config + validation, database, migrations
 ├── di/                   # dependency injection container
 └── testutil/             # shared test harness (assertions, in-memory DB, HTTP)
@@ -158,11 +159,11 @@ See [AUTH.md](AUTH.md) for the full reference.
 
 ## Observability
 
-Structured logging with `log/slog` — JSON in production, text in development.
-Every request gets an `X-Request-ID` (propagated when the client sends one) and a
-logger pre-tagged with it, placed in the request `context.Context`. Since every
-service and repository method already takes a `ctx`, any layer reaches the
-correlated logger without a single signature change:
+**Structured logging** with `log/slog` — JSON in production, text in
+development. Every request gets a correlation id and a logger pre-tagged with
+it, placed in the request `context.Context`. Since every service and repository
+method already takes a `ctx`, any layer reaches the correlated logger without a
+single signature change:
 
 ```go
 logging.FromContext(ctx).Info("work happened")
@@ -170,6 +171,62 @@ logging.FromContext(ctx).Info("work happened")
 
 Repositories and services return errors; handlers and middleware log them. One
 log line per request, no duplicates.
+
+**Tracing** with OpenTelemetry, off by default (`OTEL_ENABLED=true`). When on:
+
+- every request becomes a span, and every database query a child span, so time
+  spent in the database is attributable to the request that caused it;
+- W3C `traceparent` is honoured on the way in and propagated on the way out, so
+  a trace spans services rather than stopping here;
+- a 5xx marks its span failed and attaches the cause — a 4xx does not, because
+  telling a client no is a normal outcome and should not make every trace look
+  broken;
+- the request id *becomes* the trace id, so the log line, the error response and
+  the span in Jaeger or Tempo all share one identifier.
+
+```bash
+docker compose --profile tracing up   # Jaeger at http://localhost:16686
+OTEL_ENABLED=true OTEL_TRACES_EXPORTER=console make server   # or just print spans
+```
+
+The GORM instrumentation is written in-house
+([`internal/tracing/gorm.go`](internal/tracing/gorm.go)) rather than taken from
+`gorm.io/plugin/opentelemetry`, which links a ClickHouse driver and a
+compression library into the binary — 24 extra packages — to name the database
+system. Writing it out also makes it visible that **query variables are never
+recorded**: the SQL text goes into the span, the bound parameters (emails,
+refresh tokens, password hashes) never do. There is a test that fails if they
+ever start to.
+
+**Correlation in responses.** Error responses carry the identifiers so a user
+can quote something actionable; successful responses stay lean, since the
+`X-Request-ID` header already carries the same value.
+
+```json
+{
+  "success": false,
+  "message": "Internal server error",
+  "requestId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
+}
+```
+
+`traceId` is omitted entirely when the request is not part of a trace.
+
+An incoming `X-Request-ID` is validated before it is trusted: at most 128
+characters of `[A-Za-z0-9._-]`. Anything else is replaced with a fresh UUID
+rather than cleaned up, because the value is echoed back and written to every
+log line for the request.
+
+**JSON naming.** Every response key is camelCase — `requestId`, never
+`request_id`. A test in `internal/model/response` walks every response type and
+fails on a key that breaks the rule, so it cannot drift. Log fields keep their
+OpenTelemetry spelling (`trace_id`, `span_id`); the camelCase rule is about the
+HTTP API, not about log records.
+
+There are no metrics and no profiling endpoint. Request ids plus traces cover
+most of what a service this size needs, and `/metrics` is a deliberate next step
+rather than an omission.
 
 ## Environment
 
@@ -181,6 +238,10 @@ Copy `env.example` to `.env`; it documents every variable. The important ones:
 | `DATABASE_TYPE` | `sqlite` (default) or `postgres`; anything else is rejected at startup |
 | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `CSRF_SECRET` | required outside dev mode, minimum 32 characters, and the two JWT secrets must differ |
 | `LOG_LEVEL`, `LOG_FORMAT` | `debug`/`info`/`warn`/`error`, `json`/`text` |
+| `OTEL_ENABLED` | off by default; `true` turns on request and database spans |
+| `OTEL_TRACES_EXPORTER` | `otlp` (a collector) or `console` (stdout, no collector needed) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | defaults to `http://localhost:4318` |
+| `OTEL_TRACES_SAMPLER_ARG` | fraction of new traces kept, 0 to 1 |
 | `RATE_LIMIT_RPS`, `RATE_LIMIT_BURST` | per-client-IP token bucket |
 | `TRUSTED_PROXIES` | empty means trust none, so `ClientIP` is the direct peer |
 

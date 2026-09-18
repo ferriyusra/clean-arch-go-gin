@@ -61,6 +61,8 @@ Clean Architecture, dependencies point inward only:
   with `binding:` tags), `response/` (output DTOs + `APIResponse` in `wrapper.go`).
 - **apperr/**: the `*apperr.Error` type plus the sentinels every layer shares.
 - **logging/**: `slog` setup and the context-scoped logger accessor.
+- **tracing/**: OpenTelemetry setup, the in-house GORM span plugin, and the
+  trace-id helpers. Off unless `OTEL_ENABLED=true`.
 - **platform/**: `config.go` (env parsing), `config_validate.go` (startup
   validation), `database.go` (dialector, pool, ping/retry, close, health probe),
   `migrate.go` (schema + seed).
@@ -90,6 +92,16 @@ Cross-cutting facts that are not visible from a single file:
 - **Errors**: services return `*apperr.Error` sentinels, or wrap an internal
   cause with `apperr.Internal`. Never compare error strings; use `errors.Is`.
   Anything that is not an `*apperr.Error` becomes a 500 with a generic message.
+
+- **Tracing is opt-in and correlated with the logs.** `middleware.RequestID`
+  adopts the W3C trace id as the request id when a span exists, so one
+  identifier covers the log line, the error body and the span. `handler.Fail`
+  marks the span failed on 5xx only. The GORM plugin records SQL text but never
+  bound parameters, and a test enforces that.
+- **Response JSON is camelCase.** `internal/model/response/naming_test.go` walks
+  every response type and fails on a key that breaks the rule; a new response
+  struct has to be added to its `responseTypes()` list to be covered. Log fields
+  keep OpenTelemetry spelling (`trace_id`, `span_id`) and are not affected.
 
 ## Adding a Feature (TDD order)
 

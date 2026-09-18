@@ -191,3 +191,35 @@ silent source of green-but-wrong tests.
 
 Write the handler test against the status codes you *want*, not the ones the
 code currently returns, and then make it pass.
+
+## Tracing tests
+
+`internal/tracing` is tested with an in-memory span exporter
+(`tracetest.NewInMemoryExporter`) rather than a live collector, so the
+assertions are about spans as data:
+
+```go
+exporter := tracetest.NewInMemoryExporter()
+provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+otel.SetTracerProvider(provider)
+// ... drive a request ...
+spans := exporter.GetSpans()
+```
+
+`WithSyncer` rather than `WithBatcher` matters: the batch processor exports on a
+timer, so a test would have to sleep or flush. The syncer exports on `span.End()`
+and the assertion can run immediately.
+
+Two of these tests are worth copying when you add instrumentation of your own:
+
+- one asserts the database span is a **child of** the request span and shares its
+  trace id, which is what makes database time attributable to a request. It
+  fails if someone drops the `WithContext(ctx)` that carries the span;
+- one scans every attribute of every span for a known email address. Query
+  parameters carry emails, refresh tokens and bcrypt hashes, and the moment
+  instrumentation starts recording them they are in a third-party system. That
+  test is a security regression test, not a coverage exercise.
+
+`t.Cleanup` restores the previous global tracer provider, since
+`otel.SetTracerProvider` is process-wide and would otherwise leak into the rest
+of the suite.
