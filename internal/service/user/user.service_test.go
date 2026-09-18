@@ -3,9 +3,9 @@ package user
 import (
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/service/token"
+	"go.uber.org/mock/gomock"
 )
 
 func TestNewUserService(t *testing.T) {

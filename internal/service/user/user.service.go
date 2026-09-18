@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/interfaces"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/service/token"
+	"github.com/google/uuid"
 )
 
 // UserService defines the interface for user operations

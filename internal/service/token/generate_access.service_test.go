@@ -12,12 +12,12 @@ func TestGenerateAccessToken(t *testing.T) {
 	testUserID := uuid.New()
 
 	tests := []struct {
-		name            string
-		config          TokenConfig
-		userID          uuid.UUID
-		email           string
-		userName        string
-		expectedError   bool
+		name          string
+		config        TokenConfig
+		userID        uuid.UUID
+		email         string
+		userName      string
+		expectedError bool
 	}{
 		{
 			name: "should generate access token successfully",

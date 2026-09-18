@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 

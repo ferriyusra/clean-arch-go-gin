@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
-	"github.com/google/uuid"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/service/token"
+	"github.com/google/uuid"
+	"go.uber.org/mock/gomock"
 )
 
 func TestRefresh(t *testing.T) {

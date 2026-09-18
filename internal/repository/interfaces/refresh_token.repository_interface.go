@@ -3,8 +3,8 @@ package interfaces
 import (
 	"context"
 
-	"github.com/google/uuid"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/google/uuid"
 )
 
 // RefreshTokenRepository defines the interface for refresh token data access

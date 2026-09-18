@@ -9,7 +9,7 @@ import (
 
 // RefreshTokenEntity represents a refresh token stored in the database
 type RefreshTokenEntity struct {
-	ID        uuid.UUID      `gorm:"primaryKey"`
+	ID        uuid.UUID `gorm:"primaryKey"`
 	UserID    uuid.UUID
 	Token     string
 	ExpiresAt time.Time

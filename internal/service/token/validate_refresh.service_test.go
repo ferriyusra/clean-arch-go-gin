@@ -126,8 +126,6 @@ func TestValidateRefreshTokenExpired(t *testing.T) {
 	}
 }
 
-
-
 func TestValidateRefreshTokenClaimsIntegrity(t *testing.T) {
 	testUserID := uuid.New()
 

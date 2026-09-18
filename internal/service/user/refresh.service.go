@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
+	"github.com/google/uuid"
 )
 
 // Refresh generates a new access token from a refresh token

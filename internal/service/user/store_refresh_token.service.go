@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/google/uuid"
 )
 
 // StoreRefreshToken persists a refresh token in the database

@@ -3,8 +3,8 @@ package message
 import (
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
+	"go.uber.org/mock/gomock"
 )
 
 func TestNewMessageService(t *testing.T) {

@@ -3,7 +3,7 @@ package health
 import (
 	"testing"
 
-	"github.com/golang/mock/gomock"
+	"go.uber.org/mock/gomock"
 )
 
 func TestNewHealthService(t *testing.T) {
