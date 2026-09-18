@@ -3,6 +3,7 @@ package handler_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/api/handler"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/api/middleware"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/service/mock"
@@ -127,4 +129,51 @@ func TestHealthHandlerReadiness(t *testing.T) {
 			testutil.Equal(t, rec.Code, tt.wantStatus, "status")
 		})
 	}
+}
+
+// TestErrorResponsesCarryTheCorrelationID is the point of the whole exercise:
+// a 500 body used to be an opaque "Internal server error" with nothing a user
+// could quote back, so a bug report could not be tied to any log line.
+func TestErrorResponsesCarryTheCorrelationID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	svc := mock.NewMockCounterService(ctrl)
+	svc.EXPECT().GetCounter(gomock.Any()).Return(nil, apperr.Internal(errors.New("boom")))
+
+	r := testutil.NewEngine(t)
+	r.Use(middleware.RequestID(slog.New(slog.DiscardHandler)))
+	r.GET("/api/counter", handler.NewCounterHandler(svc).GetCounter)
+
+	req := testutil.JSONRequest(t, http.MethodGet, "/api/counter", nil)
+	req.Header.Set(middleware.RequestIDHeader, "known-id-123")
+
+	rec := testutil.Do(r, req)
+
+	testutil.Equal(t, rec.Code, http.StatusInternalServerError, "status")
+
+	envelope := testutil.Envelope(t, rec)
+	testutil.Equal(t, envelope.RequestID, "known-id-123", "requestId in the body")
+	testutil.Equal(t, rec.Header().Get(middleware.RequestIDHeader), "known-id-123", "header matches")
+
+	// traceId is only meaningful when the request is part of a trace; with
+	// tracing off it must be omitted rather than sent empty.
+	testutil.Equal(t, envelope.TraceID, "", "traceId omitted when untraced")
+	testutil.True(t, !strings.Contains(rec.Body.String(), "traceId"), "no empty traceId key")
+}
+
+// Successful responses stay lean: the id is already on the header, and adding
+// it to every payload would change the shape of every existing client parse.
+func TestSuccessResponsesDoNotCarryTheCorrelationID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	svc := mock.NewMockCounterService(ctrl)
+	svc.EXPECT().GetCounter(gomock.Any()).Return(&response.GetCounter{Value: 1}, nil)
+
+	r := testutil.NewEngine(t)
+	r.Use(middleware.RequestID(slog.New(slog.DiscardHandler)))
+	r.GET("/api/counter", handler.NewCounterHandler(svc).GetCounter)
+
+	rec := testutil.Do(r, testutil.JSONRequest(t, http.MethodGet, "/api/counter", nil))
+
+	testutil.Equal(t, rec.Code, http.StatusOK, "status")
+	testutil.True(t, !strings.Contains(rec.Body.String(), "requestId"), "no requestId in a success body")
+	testutil.True(t, rec.Header().Get(middleware.RequestIDHeader) != "", "still on the header")
 }

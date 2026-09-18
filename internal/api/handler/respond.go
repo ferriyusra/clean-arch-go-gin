@@ -11,9 +11,11 @@ import (
 	"github.com/gin-gonic/gin/binding"
 	"github.com/go-playground/validator/v10"
 
+	"github.com/ferriyusra/clean-arch-go-gin/internal/api/middleware"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/logging"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/tracing"
 )
 
 func init() {
@@ -56,11 +58,23 @@ func Fail(c *gin.Context, err error) {
 		log.Warn("request rejected", attrs...)
 	}
 
+	// A 5xx is a failure of this service, so the span is marked failed and
+	// carries the cause. A 4xx is the client being told no, which is a normal
+	// outcome and must not make every trace look broken.
+	if status >= http.StatusInternalServerError {
+		tracing.RecordError(c.Request.Context(), err, apperr.ClientMessage(err))
+	}
+
+	requestID := middleware.GetRequestID(c)
+	traceID := middleware.GetTraceID(c)
+
 	if fields := apperr.Fields(err); len(fields) > 0 {
-		c.AbortWithStatusJSON(status, response.ValidationErr(apperr.ClientMessage(err), fields))
+		c.AbortWithStatusJSON(status, response.ValidationErr(apperr.ClientMessage(err), fields).
+			WithCorrelation(requestID, traceID))
 		return
 	}
-	c.AbortWithStatusJSON(status, response.Err(apperr.ClientMessage(err)))
+	c.AbortWithStatusJSON(status, response.Err(apperr.ClientMessage(err)).
+		WithCorrelation(requestID, traceID))
 }
 
 // BindJSON decodes and validates a request body, reporting field-level errors.

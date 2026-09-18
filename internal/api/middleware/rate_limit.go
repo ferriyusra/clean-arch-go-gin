@@ -9,7 +9,6 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
 )
 
 // RateLimitConfig configures the per-client token bucket.
@@ -89,10 +88,7 @@ func RateLimit(cfg RateLimitConfig) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		if !limiter.allow(c.ClientIP()) {
-			c.AbortWithStatusJSON(
-				http.StatusTooManyRequests,
-				response.Err(apperr.ErrRateLimit.Message),
-			)
+			abortWithError(c, http.StatusTooManyRequests, apperr.ErrRateLimit.Message)
 			return
 		}
 		c.Next()

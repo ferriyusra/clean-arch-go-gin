@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/service/csrf"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/service/token"
 )
@@ -30,13 +29,13 @@ func AuthMiddleware(tokenService token.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenStr, err := c.Cookie(AccessTokenCookie)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, response.Err(apperr.ErrMissingAccessToken.Message))
+			abortWithError(c, http.StatusUnauthorized, apperr.ErrMissingAccessToken.Message)
 			return
 		}
 
 		claims, err := tokenService.ValidateAccessToken(tokenStr)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, response.Err(apperr.ErrInvalidAccessToken.Message))
+			abortWithError(c, http.StatusUnauthorized, apperr.ErrInvalidAccessToken.Message)
 			return
 		}
 
@@ -80,11 +79,11 @@ func CSRFMiddleware(csrfService csrf.CSRFService) gin.HandlerFunc {
 		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 			csrfToken := c.GetHeader("X-CSRF-Token")
 			if csrfToken == "" {
-				c.AbortWithStatusJSON(http.StatusForbidden, response.Err(apperr.ErrMissingCSRFToken.Message))
+				abortWithError(c, http.StatusForbidden, apperr.ErrMissingCSRFToken.Message)
 				return
 			}
 			if !csrfService.ValidateToken(csrfToken) {
-				c.AbortWithStatusJSON(http.StatusForbidden, response.Err(apperr.ErrInvalidCSRFToken.Message))
+				abortWithError(c, http.StatusForbidden, apperr.ErrInvalidCSRFToken.Message)
 				return
 			}
 		}

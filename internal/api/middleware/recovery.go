@@ -8,7 +8,6 @@ import (
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/logging"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
 )
 
 // Recovery turns a panic into the standard APIResponse envelope.
@@ -24,10 +23,7 @@ func Recovery() gin.HandlerFunc {
 					"stack", string(debug.Stack()),
 				)
 
-				c.AbortWithStatusJSON(
-					http.StatusInternalServerError,
-					response.Err(apperr.ErrInternal.Message),
-				)
+				abortWithError(c, http.StatusInternalServerError, apperr.ErrInternal.Message)
 			}
 		}()
 

@@ -68,9 +68,11 @@ func SetupHealthRoutes(r *gin.Engine, healthHandler *handler.HealthHandler) {
 // every other response, instead of gin's bare 404/405 with an empty body.
 func SetupFallbacks(r *gin.Engine) {
 	r.NoRoute(func(c *gin.Context) {
-		c.AbortWithStatusJSON(http.StatusNotFound, response.Err("Route not found"))
+		c.AbortWithStatusJSON(http.StatusNotFound, response.Err("Route not found").
+			WithCorrelation(middleware.GetRequestID(c), middleware.GetTraceID(c)))
 	})
 	r.NoMethod(func(c *gin.Context) {
-		c.AbortWithStatusJSON(http.StatusMethodNotAllowed, response.Err("Method not allowed"))
+		c.AbortWithStatusJSON(http.StatusMethodNotAllowed, response.Err("Method not allowed").
+			WithCorrelation(middleware.GetRequestID(c), middleware.GetTraceID(c)))
 	})
 }

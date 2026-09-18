@@ -2,6 +2,7 @@ package di_test
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -222,4 +223,59 @@ func TestContainerCloseLeavesAnInjectedDatabaseAlone(t *testing.T) {
 
 	rec := testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, "/api/message", nil))
 	testutil.Equal(t, rec.Code, http.StatusOK, "the database still works after Close")
+}
+
+// TestErrorResponsesAreTraceableEndToEnd checks the wiring rather than the
+// handler: the RequestID middleware, the router fallbacks and handler.Fail all
+// have to agree on the same identifier for a report to be actionable.
+func TestErrorResponsesAreTraceableEndToEnd(t *testing.T) {
+	engine := newTestContainer(t).Router
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		status int
+	}{
+		{name: "unknown route", method: http.MethodGet, path: "/api/nope", status: http.StatusNotFound},
+		{name: "unauthenticated", method: http.MethodGet, path: "/api/auth/me", status: http.StatusUnauthorized},
+		{name: "missing csrf token", method: http.MethodPost, path: "/api/auth/refresh", status: http.StatusForbidden},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := testutil.Do(engine, testutil.JSONRequest(t, tc.method, tc.path, nil))
+
+			testutil.Equal(t, rec.Code, tc.status, "status")
+
+			envelope := testutil.Envelope(t, rec)
+			header := rec.Header().Get(middleware.RequestIDHeader)
+
+			testutil.True(t, envelope.RequestID != "", "the body carries a requestId")
+			testutil.Equal(t, envelope.RequestID, header, "body and header agree")
+		})
+	}
+}
+
+// TestValidationErrorsAreCamelCaseAndCorrelated pins the response contract the
+// front end codes against.
+func TestValidationErrorsAreCamelCaseAndCorrelated(t *testing.T) {
+	engine := newTestContainer(t).Router
+
+	rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+		"email": "not-an-email",
+	}))
+
+	testutil.Equal(t, rec.Code, http.StatusBadRequest, "status")
+
+	body := rec.Body.String()
+	testutil.True(t, strings.Contains(body, `"requestId"`), "requestId is camelCase")
+	testutil.True(t, !strings.Contains(body, `"request_id"`), "no snake_case key")
+
+	envelope := testutil.Envelope(t, rec)
+	for _, field := range []string{"email", "password", "name"} {
+		if _, ok := envelope.Errors[field]; !ok {
+			t.Errorf("expected a validation error for %q, got %v", field, envelope.Errors)
+		}
+	}
 }
