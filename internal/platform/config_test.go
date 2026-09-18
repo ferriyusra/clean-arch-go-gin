@@ -1,14 +1,13 @@
 package platform
 
 import (
-	"os"
 	"testing"
 	"time"
 )
 
 func TestNewConfig_DefaultValues(t *testing.T) {
 	// Clear environment variables
-	clearEnv()
+	clearEnv(t)
 
 	// Act
 	cfg := NewConfig()
@@ -34,11 +33,10 @@ func TestNewConfig_DefaultValues(t *testing.T) {
 
 func TestNewConfig_EnvironmentOverrides(t *testing.T) {
 	// Clear and set environment variables
-	clearEnv()
-	os.Setenv("SERVER_PORT", "9000")
-	os.Setenv("REDIS_HOST", "redis.example.com")
-	os.Setenv("REDIS_PORT", "6380")
-	defer clearEnv()
+	clearEnv(t)
+	t.Setenv("SERVER_PORT", "9000")
+	t.Setenv("REDIS_HOST", "redis.example.com")
+	t.Setenv("REDIS_PORT", "6380")
 
 	// Act
 	cfg := NewConfig()
@@ -58,11 +56,10 @@ func TestNewConfig_EnvironmentOverrides(t *testing.T) {
 }
 
 func TestNewConfig_DatabaseConfig(t *testing.T) {
-	clearEnv()
-	os.Setenv("DATABASE_DSN", "postgres://user:pass@localhost/db")
-	os.Setenv("DATABASE_MAX_OPEN_CONNS", "50")
-	os.Setenv("DATABASE_MAX_IDLE_CONNS", "10")
-	defer clearEnv()
+	clearEnv(t)
+	t.Setenv("DATABASE_DSN", "postgres://user:pass@localhost/db")
+	t.Setenv("DATABASE_MAX_OPEN_CONNS", "50")
+	t.Setenv("DATABASE_MAX_IDLE_CONNS", "10")
 
 	// Act
 	cfg := NewConfig()
@@ -82,8 +79,7 @@ func TestNewConfig_DatabaseConfig(t *testing.T) {
 }
 
 func TestGetEnv_WithValue(t *testing.T) {
-	os.Setenv("TEST_ENV_VAR", "test_value")
-	defer os.Unsetenv("TEST_ENV_VAR")
+	t.Setenv("TEST_ENV_VAR", "test_value")
 
 	result := getEnv("TEST_ENV_VAR", "default")
 
@@ -93,7 +89,7 @@ func TestGetEnv_WithValue(t *testing.T) {
 }
 
 func TestGetEnv_WithDefault(t *testing.T) {
-	os.Unsetenv("NONEXISTENT_VAR")
+	t.Setenv("NONEXISTENT_VAR", "")
 
 	result := getEnv("NONEXISTENT_VAR", "default_value")
 
@@ -103,8 +99,7 @@ func TestGetEnv_WithDefault(t *testing.T) {
 }
 
 func TestGetEnvInt_WithValue(t *testing.T) {
-	os.Setenv("TEST_INT", "42")
-	defer os.Unsetenv("TEST_INT")
+	t.Setenv("TEST_INT", "42")
 
 	result := getEnvInt("TEST_INT", 0)
 
@@ -114,7 +109,7 @@ func TestGetEnvInt_WithValue(t *testing.T) {
 }
 
 func TestGetEnvInt_WithDefault(t *testing.T) {
-	os.Unsetenv("NONEXISTENT_INT")
+	t.Setenv("NONEXISTENT_INT", "")
 
 	result := getEnvInt("NONEXISTENT_INT", 99)
 
@@ -124,8 +119,7 @@ func TestGetEnvInt_WithDefault(t *testing.T) {
 }
 
 func TestGetEnvInt_InvalidValue(t *testing.T) {
-	os.Setenv("INVALID_INT", "not_a_number")
-	defer os.Unsetenv("INVALID_INT")
+	t.Setenv("INVALID_INT", "not_a_number")
 
 	result := getEnvInt("INVALID_INT", 77)
 
@@ -144,12 +138,11 @@ func TestGetEnvBool_True(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		os.Setenv("TEST_BOOL", tt.value)
+		t.Setenv("TEST_BOOL", tt.value)
 		result := getEnvBool("TEST_BOOL", false)
 		if !result {
 			t.Errorf("expected true for value %q", tt.value)
 		}
-		os.Unsetenv("TEST_BOOL")
 	}
 }
 
@@ -163,18 +156,16 @@ func TestGetEnvBool_False(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		os.Setenv("TEST_BOOL", tt.value)
+		t.Setenv("TEST_BOOL", tt.value)
 		result := getEnvBool("TEST_BOOL", true)
 		if result {
 			t.Errorf("expected false for value %q", tt.value)
 		}
-		os.Unsetenv("TEST_BOOL")
 	}
 }
 
 func TestGetEnvBool_EmptyString(t *testing.T) {
-	os.Setenv("TEST_BOOL", "")
-	defer os.Unsetenv("TEST_BOOL")
+	t.Setenv("TEST_BOOL", "")
 
 	result := getEnvBool("TEST_BOOL", true)
 
@@ -185,7 +176,7 @@ func TestGetEnvBool_EmptyString(t *testing.T) {
 }
 
 func TestGetEnvBool_WithDefault(t *testing.T) {
-	os.Unsetenv("NONEXISTENT_BOOL")
+	t.Setenv("NONEXISTENT_BOOL", "")
 
 	result := getEnvBool("NONEXISTENT_BOOL", true)
 
@@ -195,8 +186,7 @@ func TestGetEnvBool_WithDefault(t *testing.T) {
 }
 
 func TestGetEnvDuration_WithValue(t *testing.T) {
-	os.Setenv("TEST_DURATION", "30s")
-	defer os.Unsetenv("TEST_DURATION")
+	t.Setenv("TEST_DURATION", "30s")
 
 	result := getEnvDuration("TEST_DURATION", 0)
 
@@ -206,7 +196,7 @@ func TestGetEnvDuration_WithValue(t *testing.T) {
 }
 
 func TestGetEnvDuration_WithDefault(t *testing.T) {
-	os.Unsetenv("NONEXISTENT_DURATION")
+	t.Setenv("NONEXISTENT_DURATION", "")
 
 	result := getEnvDuration("NONEXISTENT_DURATION", 5*time.Minute)
 
@@ -216,8 +206,7 @@ func TestGetEnvDuration_WithDefault(t *testing.T) {
 }
 
 func TestGetEnvDuration_InvalidValue(t *testing.T) {
-	os.Setenv("INVALID_DURATION", "not_a_duration")
-	defer os.Unsetenv("INVALID_DURATION")
+	t.Setenv("INVALID_DURATION", "not_a_duration")
 
 	result := getEnvDuration("INVALID_DURATION", 10*time.Second)
 
@@ -227,13 +216,12 @@ func TestGetEnvDuration_InvalidValue(t *testing.T) {
 }
 
 func TestNewConfig_AllServerSettings(t *testing.T) {
-	clearEnv()
-	os.Setenv("SERVER_HOST", "0.0.0.0")
-	os.Setenv("SERVER_PORT", "3000")
-	os.Setenv("SERVER_READ_TIMEOUT", "20s")
-	os.Setenv("SERVER_WRITE_TIMEOUT", "25s")
-	os.Setenv("SERVER_IDLE_TIMEOUT", "90s")
-	defer clearEnv()
+	clearEnv(t)
+	t.Setenv("SERVER_HOST", "0.0.0.0")
+	t.Setenv("SERVER_PORT", "3000")
+	t.Setenv("SERVER_READ_TIMEOUT", "20s")
+	t.Setenv("SERVER_WRITE_TIMEOUT", "25s")
+	t.Setenv("SERVER_IDLE_TIMEOUT", "90s")
 
 	cfg := NewConfig()
 
@@ -255,12 +243,11 @@ func TestNewConfig_AllServerSettings(t *testing.T) {
 }
 
 func TestNewConfig_RedisAuth(t *testing.T) {
-	clearEnv()
-	os.Setenv("REDIS_HOST", "redis.prod")
-	os.Setenv("REDIS_PORT", "6380")
-	os.Setenv("REDIS_DB", "2")
-	os.Setenv("REDIS_PASSWORD", "secret123")
-	defer clearEnv()
+	clearEnv(t)
+	t.Setenv("REDIS_HOST", "redis.prod")
+	t.Setenv("REDIS_PORT", "6380")
+	t.Setenv("REDIS_DB", "2")
+	t.Setenv("REDIS_PASSWORD", "secret123")
 
 	cfg := NewConfig()
 
@@ -276,13 +263,19 @@ func TestNewConfig_RedisAuth(t *testing.T) {
 }
 
 // Helper function to clear all relevant environment variables
-func clearEnv() {
+// clearEnv blanks every variable NewConfig reads, so a test observes the
+// defaults rather than whatever the developer happens to have exported.
+//
+// t.Setenv is used rather than os.Unsetenv so the original values are restored
+// when the test ends, keeping tests independent of their order.
+func clearEnv(t *testing.T) {
+	t.Helper()
 	vars := []string{
 		"SERVER_PORT", "SERVER_HOST", "SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT", "SERVER_IDLE_TIMEOUT",
 		"DATABASE_DSN", "DATABASE_MAX_OPEN_CONNS", "DATABASE_MAX_IDLE_CONNS", "DATABASE_CONN_MAX_LIFETIME",
 		"REDIS_HOST", "REDIS_PORT", "REDIS_DB", "REDIS_PASSWORD",
 	}
 	for _, v := range vars {
-		os.Unsetenv(v)
+		t.Setenv(v, "")
 	}
 }
