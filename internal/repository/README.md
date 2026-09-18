@@ -1,3 +1,10 @@
+> **Note:** this document predates the error-handling, logging and testing work.
+> Parts of it have drifted from the code — it still describes `Authorization:
+> Bearer` auth, a `GET /api/auth/csrf` route and repository constructors that
+> return an error, none of which exist any more. Treat `internal/api/router.go`
+> and the code as the source of truth, and see [TESTING.md](../../TESTING.md)
+> for the current test harnesses. The worked examples below are still useful.
+
 # Repository Layer - How-To Guide
 
 This guide explains how to create and implement repositories in this project. Repositories handle all data access logic and serve as the bridge between the service layer and the database.
@@ -87,7 +94,7 @@ type UserRepository interface {
 Generate mocks automatically using the Makefile command. This creates mock implementations for testing.
 
 ```bash
-make repository-mocks
+make mocks
 ```
 
 This command:
@@ -105,7 +112,7 @@ package mock
 
 import (
 	context "context"
-	gomock "github.com/golang/mock/gomock"
+	gomock "go.uber.org/mock/gomock"
 	entity "github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	uuid "github.com/google/uuid"
 )
@@ -125,7 +132,7 @@ func (m *MockUserRepository) EXPECT() *MockUserRepositoryMockRecorder {
 }
 ```
 
-**Do not edit generated mock files.** They are regenerated with `make repository-mocks`.
+**Do not edit generated mock files.** They are regenerated with `make mocks`.
 
 ### Step 4: Implement Repository with GORM
 
@@ -238,7 +245,7 @@ func (r *GORMUserRepository) FindByID(ctx context.Context, id uuid.UUID) (*entit
 
 	var user entity.UserEntity
 	if err := r.db.WithContext(ctx).First(&user, "id = ?", id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -490,7 +497,7 @@ type UserRepository interface {
 func (r *GORMUserRepository) FindByEmail(ctx context.Context, email string) (*entity.UserEntity, error) {
 	var user entity.UserEntity
 	if err := r.db.WithContext(ctx).Where("email = ?", email).First(&user).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -574,11 +581,11 @@ func TestCreateUser(t *testing.T) {
 
 ### Mock Generation Failed
 
-If `make repository-mocks` fails:
+If `make mocks` fails:
 
 ```bash
 # Ensure mockgen is installed
-go install github.com/golang/mock/cmd/mockgen@latest
+go tool mockgen --version   # declared in go.mod, no install needed
 
 # Verify interface file exists
 ls internal/repository/interfaces/

@@ -1,3 +1,10 @@
+> **Note:** this document predates the error-handling, logging and testing work.
+> Parts of it have drifted from the code — it still describes `Authorization:
+> Bearer` auth, a `GET /api/auth/csrf` route and repository constructors that
+> return an error, none of which exist any more. Treat `internal/api/router.go`
+> and the code as the source of truth, and see [TESTING.md](../TESTING.md)
+> for the current test harnesses. The worked examples below are still useful.
+
 # Backend - Go Clean Architecture Guide
 
 A production-ready Go backend built with **Clean Architecture** principles, featuring comprehensive testing, dependency injection, and clear separation of concerns.
@@ -162,7 +169,7 @@ internal/
    └─ Define contract (ProductRepository)
 
 3. Generate Mocks
-   └─ Run: make repository-mocks
+   └─ Run: make mocks
 
 4. Implement Repository    → See repository/README.md
    └─ GORM implementation with real database logic
@@ -233,7 +240,7 @@ type ProductRepository interface {
 **Step 3: Generate Mocks**
 
 ```bash
-make repository-mocks
+make mocks
 ```
 
 This generates `internal/repository/mock/product.repository_mock.go`
@@ -305,7 +312,7 @@ package product
 import (
     "context"
     "testing"
-    "github.com/golang/mock/gomock"
+    "go.uber.org/mock/gomock"
     "github.com/google/uuid"
     "github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
     "github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
@@ -679,7 +686,7 @@ From `go.mod`:
 - **[UUID](https://github.com/google/uuid)**: UUID generation
 - **[Bcrypt](https://pkg.go.dev/golang.org/x/crypto/bcrypt)**: Password hashing
 - **[GoDotEnv](https://github.com/joho/godotenv)**: Environment variables
-- **[GoMock](https://github.com/golang/mock)**: Mock generation for testing
+- **[GoMock](https://github.com/uber-go/mock)**: Mock generation for testing
 
 ## 📚 Further Reading
 

@@ -1,3 +1,10 @@
+> **Note:** this document predates the error-handling, logging and testing work.
+> Parts of it have drifted from the code — it still describes `Authorization:
+> Bearer` auth, a `GET /api/auth/csrf` route and repository constructors that
+> return an error, none of which exist any more. Treat `internal/api/router.go`
+> and the code as the source of truth, and see [TESTING.md](../../TESTING.md)
+> for the current test harnesses. The worked examples below are still useful.
+
 # Service Layer - Test-Driven Development Guide
 
 This guide explains how to create and test services using Test-Driven Development (TDD) in this project.
@@ -56,7 +63,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/golang/mock/gomock"
+	"go.uber.org/mock/gomock"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"

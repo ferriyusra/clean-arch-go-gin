@@ -1,3 +1,10 @@
+> **Note:** this document predates the error-handling, logging and testing work.
+> Parts of it have drifted from the code — it still describes `Authorization:
+> Bearer` auth, a `GET /api/auth/csrf` route and repository constructors that
+> return an error, none of which exist any more. Treat `internal/api/router.go`
+> and the code as the source of truth, and see [TESTING.md](../../TESTING.md)
+> for the current test harnesses. The worked examples below are still useful.
+
 # Model Package Developer Guide
 
 ## Overview

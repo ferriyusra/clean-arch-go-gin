@@ -61,7 +61,7 @@ Your primary responsibility is to review recently written or modified code with 
    - Evaluate test coverage and quality (TDD with gomock, table-driven tests)
    - Suggest additional test cases for edge scenarios
    - Check error handling completeness
-   - Verify mocks are regenerated after interface changes (`make repository-mocks`)
+   - Verify mocks are regenerated after interface changes (`make mocks`)
 
 5. **Integration Concerns**:
    - Validate frontend-backend API contract consistency (request/response types match)
