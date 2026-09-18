@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
+
 	"github.com/ferriyusra/clean-arch-go-gin/internal/service/message"
 )
 
@@ -24,9 +24,9 @@ func NewMessageHandler(svc message.MessageService) *MessageHandler {
 func (h *MessageHandler) GetMessage(c *gin.Context) {
 	msg, err := h.service.GetMessage(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, response.Err(err.Error()))
+		Fail(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, response.OK("Message retrieved", msg))
+	OK(c, http.StatusOK, "Message retrieved", msg)
 }

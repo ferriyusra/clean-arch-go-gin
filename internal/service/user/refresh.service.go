@@ -2,15 +2,19 @@ package user
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
 	"github.com/google/uuid"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
 )
 
-// Refresh generates a new access token from a refresh token
+// Refresh generates a new access token from a refresh token.
+//
+// The refresh token must be both a valid JWT and a live row in the database;
+// the row is what makes revocation (logout) possible.
 func (s *userService) Refresh(ctx context.Context, refreshToken string) (*response.RefreshResponse, error) {
 	select {
 	case <-ctx.Done():
@@ -21,29 +25,29 @@ func (s *userService) Refresh(ctx context.Context, refreshToken string) (*respon
 	// Validate refresh token JWT
 	claims, err := s.tokenService.ValidateRefreshToken(refreshToken)
 	if err != nil {
-		return nil, errors.New("invalid refresh token")
+		return nil, apperr.ErrInvalidRefreshToken.WithCause(err)
 	}
 
 	// Verify refresh token exists in database (not revoked)
 	storedToken, err := s.refreshTokenRepository.FindByToken(ctx, refreshToken)
 	if err != nil {
-		return nil, fmt.Errorf("verifying refresh token: %w", err)
+		return nil, apperr.Internal(fmt.Errorf("verifying refresh token: %w", err))
 	}
 	if storedToken == nil {
-		return nil, errors.New("refresh token has been revoked")
+		return nil, apperr.ErrRefreshTokenRevoked
 	}
 	if storedToken.ExpiresAt.Before(time.Now()) {
-		return nil, errors.New("refresh token has expired")
+		return nil, apperr.ErrRefreshTokenExpired
 	}
 
 	// Generate new access token
 	accessToken, err := s.tokenService.GenerateAccessToken(claims.UserID, claims.Email, claims.Name)
 	if err != nil {
-		return nil, fmt.Errorf("generating access token: %w", err)
+		return nil, apperr.Internal(fmt.Errorf("generating access token: %w", err))
 	}
 
 	return &response.RefreshResponse{
-		Message: accessToken,
+		AccessToken: accessToken,
 	}, nil
 }
 
@@ -57,15 +61,15 @@ func (s *userService) GetUser(ctx context.Context, userID string) (*response.Get
 
 	id, err := uuid.Parse(userID)
 	if err != nil {
-		return nil, errors.New("invalid user id")
+		return nil, apperr.ErrInvalidUserID.WithCause(err)
 	}
 
 	user, err := s.userRepository.FindByID(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Internal(fmt.Errorf("finding user by id: %w", err))
 	}
 	if user == nil {
-		return nil, errors.New("user not found")
+		return nil, apperr.ErrUserNotFound
 	}
 
 	return &response.GetUser{

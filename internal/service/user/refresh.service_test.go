@@ -6,288 +6,222 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/service/token"
 	"github.com/google/uuid"
 	"go.uber.org/mock/gomock"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/testutil"
 )
 
 func TestRefresh(t *testing.T) {
-	testUserID := uuid.New()
-	tokenConfig := token.TokenConfig{
-		AccessTokenSecret:  "test-access-secret",
-		AccessTokenExpiry:  15 * time.Minute,
-		RefreshTokenSecret: "test-refresh-secret",
-		RefreshTokenExpiry: 7 * 24 * time.Hour,
-	}
-	tokenSvc := token.NewTokenService(tokenConfig)
-
-	// Generate a valid refresh token for testing
-	validRefreshToken, _ := tokenSvc.GenerateRefreshToken(testUserID)
+	userID := uuid.New()
 
 	tests := []struct {
-		name               string
-		refreshToken       string
-		mockFindByToken    *entity.RefreshTokenEntity
-		mockFindByTokenErr error
-		setupMock          bool
-		expectedError      bool
-		expectedErrorMsg   string
+		name string
+		// token is built per-case because a valid one has to be signed by the
+		// same service under test.
+		token   func(deps *testDeps) string
+		expect  func(deps *testDeps, token string)
+		wantErr error
 	}{
 		{
-			name:         "should refresh token successfully",
-			refreshToken: validRefreshToken,
-			mockFindByToken: &entity.RefreshTokenEntity{
-				ID:        uuid.New(),
-				UserID:    testUserID,
-				Token:     validRefreshToken,
-				ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
+			name: "issues a new access token for a live refresh token",
+			token: func(deps *testDeps) string {
+				tokenStr, err := deps.tokens.GenerateRefreshToken(userID)
+				testutil.NoError(t, err)
+				return tokenStr
 			},
-			mockFindByTokenErr: nil,
-			setupMock:          true,
-			expectedError:      false,
-		},
-		{
-			name:             "should return error when refresh token is invalid JWT",
-			refreshToken:     "invalid-token",
-			setupMock:        false,
-			expectedError:    true,
-			expectedErrorMsg: "invalid refresh token",
-		},
-		{
-			name:             "should return error when refresh token is empty",
-			refreshToken:     "",
-			setupMock:        false,
-			expectedError:    true,
-			expectedErrorMsg: "invalid refresh token",
-		},
-		{
-			name:               "should return error when refresh token not found in DB (revoked)",
-			refreshToken:       validRefreshToken,
-			mockFindByToken:    nil,
-			mockFindByTokenErr: nil,
-			setupMock:          true,
-			expectedError:      true,
-			expectedErrorMsg:   "refresh token has been revoked",
-		},
-		{
-			name:         "should return error when refresh token is expired in DB",
-			refreshToken: validRefreshToken,
-			mockFindByToken: &entity.RefreshTokenEntity{
-				ID:        uuid.New(),
-				UserID:    testUserID,
-				Token:     validRefreshToken,
-				ExpiresAt: time.Now().Add(-1 * time.Hour),
+			expect: func(deps *testDeps, tokenStr string) {
+				deps.refreshTokens.EXPECT().FindByToken(gomock.Any(), tokenStr).
+					Return(&entity.RefreshTokenEntity{
+						ID:        uuid.New(),
+						UserID:    userID,
+						Token:     tokenStr,
+						ExpiresAt: time.Now().Add(time.Hour),
+					}, nil)
 			},
-			mockFindByTokenErr: nil,
-			setupMock:          true,
-			expectedError:      true,
-			expectedErrorMsg:   "refresh token has expired",
 		},
 		{
-			name:               "should return error when repository fails",
-			refreshToken:       validRefreshToken,
-			mockFindByToken:    nil,
-			mockFindByTokenErr: errors.New("database error"),
-			setupMock:          true,
-			expectedError:      true,
+			name:    "rejects a malformed token",
+			token:   func(*testDeps) string { return "not-a-jwt" },
+			expect:  func(*testDeps, string) {},
+			wantErr: apperr.ErrInvalidRefreshToken,
+		},
+		{
+			name: "rejects a token that is no longer stored (revoked by logout)",
+			token: func(deps *testDeps) string {
+				tokenStr, err := deps.tokens.GenerateRefreshToken(userID)
+				testutil.NoError(t, err)
+				return tokenStr
+			},
+			expect: func(deps *testDeps, tokenStr string) {
+				deps.refreshTokens.EXPECT().FindByToken(gomock.Any(), tokenStr).Return(nil, nil)
+			},
+			wantErr: apperr.ErrRefreshTokenRevoked,
+		},
+		{
+			name: "rejects a stored token past its expiry",
+			token: func(deps *testDeps) string {
+				tokenStr, err := deps.tokens.GenerateRefreshToken(userID)
+				testutil.NoError(t, err)
+				return tokenStr
+			},
+			expect: func(deps *testDeps, tokenStr string) {
+				deps.refreshTokens.EXPECT().FindByToken(gomock.Any(), tokenStr).
+					Return(&entity.RefreshTokenEntity{
+						ID:        uuid.New(),
+						UserID:    userID,
+						Token:     tokenStr,
+						ExpiresAt: time.Now().Add(-time.Hour),
+					}, nil)
+			},
+			wantErr: apperr.ErrRefreshTokenExpired,
+		},
+		{
+			name: "reports a lookup failure as internal",
+			token: func(deps *testDeps) string {
+				tokenStr, err := deps.tokens.GenerateRefreshToken(userID)
+				testutil.NoError(t, err)
+				return tokenStr
+			},
+			expect: func(deps *testDeps, tokenStr string) {
+				deps.refreshTokens.EXPECT().FindByToken(gomock.Any(), tokenStr).
+					Return(nil, errors.New("database error"))
+			},
+			wantErr: apperr.ErrInternal,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
+			deps := newTestDeps(t)
+			tokenStr := tt.token(deps)
+			tt.expect(deps, tokenStr)
 
-			// Setup mock repositories
-			mockRepo := mock.NewMockUserRepository(ctrl)
-			mockRefreshTokenRepo := mock.NewMockRefreshTokenRepository(ctrl)
+			result, err := deps.service.Refresh(context.Background(), tokenStr)
 
-			// Setup FindByToken expectation only when JWT is valid
-			if tt.setupMock {
-				mockRefreshTokenRepo.EXPECT().
-					FindByToken(gomock.Any(), tt.refreshToken).
-					Return(tt.mockFindByToken, tt.mockFindByTokenErr).
-					Times(1)
+			if tt.wantErr != nil {
+				testutil.ErrorIs(t, err, tt.wantErr)
+				return
 			}
 
-			// Create service with same token config
-			svc := NewUserService(mockRepo, mockRefreshTokenRepo, tokenSvc)
-
-			// Call refresh
-			result, err := svc.Refresh(context.Background(), tt.refreshToken)
-
-			// Assert results
-			if tt.expectedError {
-				if err == nil {
-					t.Errorf("expected error, got nil")
-				}
-				if tt.expectedErrorMsg != "" && err.Error() != tt.expectedErrorMsg {
-					t.Errorf("expected error message '%s', got '%s'", tt.expectedErrorMsg, err.Error())
-				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if result == nil {
-					t.Errorf("expected non-nil result")
-				}
-				if result != nil && result.Message == "" {
-					t.Errorf("expected non-empty message (access token)")
-				}
+			testutil.NoError(t, err)
+			if result == nil {
+				t.Fatalf("expected a result")
 			}
+			testutil.True(t, result.AccessToken != "", "a new access token is issued")
+
+			// The token must actually validate, not merely be non-empty.
+			claims, err := deps.tokens.ValidateAccessToken(result.AccessToken)
+			testutil.NoError(t, err)
+			testutil.Equal(t, claims.UserID, userID, "user id in the new access token")
 		})
 	}
 }
 
+// TestRefreshRejectsAnAccessTokenPresentedAsRefresh guards the separation of the
+// two signing secrets.
+func TestRefreshRejectsAnAccessTokenPresentedAsRefresh(t *testing.T) {
+	deps := newTestDeps(t)
+
+	accessToken, err := deps.tokens.GenerateAccessToken(uuid.New(), "test@example.com", "Test User")
+	testutil.NoError(t, err)
+
+	_, err = deps.service.Refresh(context.Background(), accessToken)
+
+	testutil.ErrorIs(t, err, apperr.ErrInvalidRefreshToken)
+}
+
 func TestRefreshContextCancellation(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	deps := newTestDeps(t)
 
-	mockRepo := mock.NewMockUserRepository(ctrl)
-	mockRefreshTokenRepo := mock.NewMockRefreshTokenRepository(ctrl)
-	tokenConfig := token.TokenConfig{
-		AccessTokenSecret:  "test-access-secret",
-		RefreshTokenSecret: "test-refresh-secret",
-	}
-	tokenSvc := token.NewTokenService(tokenConfig)
-
-	svc := NewUserService(mockRepo, mockRefreshTokenRepo, tokenSvc)
-
-	// Create a cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	result, err := svc.Refresh(ctx, "some-token")
+	result, err := deps.service.Refresh(ctx, "any-token")
 
-	if err == nil {
-		t.Errorf("expected context.Canceled error, got nil")
-	}
+	testutil.ErrorIs(t, err, context.Canceled)
 	if result != nil {
 		t.Errorf("expected nil result, got %v", result)
 	}
 }
 
 func TestGetUser(t *testing.T) {
-	testUserID := uuid.New()
+	userID := uuid.New()
 
 	tests := []struct {
-		name             string
-		userIDString     string
-		mockFindByID     *entity.UserEntity
-		mockFindByIDErr  error
-		expectedError    bool
-		expectedErrorMsg string
+		name    string
+		userID  string
+		expect  func(deps *testDeps)
+		wantErr error
 	}{
 		{
-			name:         "should get user successfully",
-			userIDString: testUserID.String(),
-			mockFindByID: &entity.UserEntity{
-				ID:    testUserID,
-				Email: "test@example.com",
-				Name:  "Test User",
+			name:   "returns the user",
+			userID: userID.String(),
+			expect: func(deps *testDeps) {
+				deps.users.EXPECT().FindByID(gomock.Any(), userID).Return(&entity.UserEntity{
+					ID:    userID,
+					Email: "test@example.com",
+					Name:  "Test User",
+				}, nil)
 			},
-			mockFindByIDErr: nil,
-			expectedError:   false,
 		},
 		{
-			name:             "should return error when user id is invalid",
-			userIDString:     "invalid-uuid",
-			mockFindByID:     nil,
-			expectedError:    true,
-			expectedErrorMsg: "invalid user id",
+			name:    "rejects an id that is not a UUID",
+			userID:  "not-a-uuid",
+			expect:  func(*testDeps) {},
+			wantErr: apperr.ErrInvalidUserID,
 		},
 		{
-			name:             "should return error when user not found",
-			userIDString:     testUserID.String(),
-			mockFindByID:     nil,
-			mockFindByIDErr:  nil,
-			expectedError:    true,
-			expectedErrorMsg: "user not found",
+			name:   "reports a missing user as not found",
+			userID: userID.String(),
+			expect: func(deps *testDeps) {
+				deps.users.EXPECT().FindByID(gomock.Any(), userID).Return(nil, nil)
+			},
+			wantErr: apperr.ErrUserNotFound,
 		},
 		{
-			name:            "should return error when repository fails",
-			userIDString:    testUserID.String(),
-			mockFindByID:    nil,
-			mockFindByIDErr: errors.New("database error"),
-			expectedError:   true,
+			name:   "reports a lookup failure as internal, not as not found",
+			userID: userID.String(),
+			expect: func(deps *testDeps) {
+				deps.users.EXPECT().FindByID(gomock.Any(), userID).
+					Return(nil, errors.New("database error"))
+			},
+			wantErr: apperr.ErrInternal,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
+			deps := newTestDeps(t)
+			tt.expect(deps)
 
-			// Setup mock repositories
-			mockRepo := mock.NewMockUserRepository(ctrl)
-			mockRefreshTokenRepo := mock.NewMockRefreshTokenRepository(ctrl)
+			result, err := deps.service.GetUser(context.Background(), tt.userID)
 
-			// Setup FindByID expectation only if valid UUID
-			if _, err := uuid.Parse(tt.userIDString); err == nil {
-				mockRepo.EXPECT().
-					FindByID(gomock.Any(), gomock.Any()).
-					Return(tt.mockFindByID, tt.mockFindByIDErr).
-					Times(1)
+			if tt.wantErr != nil {
+				testutil.ErrorIs(t, err, tt.wantErr)
+				return
 			}
 
-			// Setup token service
-			tokenConfig := token.TokenConfig{
-				AccessTokenSecret:  "test-access-secret",
-				RefreshTokenSecret: "test-refresh-secret",
+			testutil.NoError(t, err)
+			if result == nil {
+				t.Fatalf("expected a result")
 			}
-			tokenSvc := token.NewTokenService(tokenConfig)
-
-			// Create service
-			svc := NewUserService(mockRepo, mockRefreshTokenRepo, tokenSvc)
-
-			// Call getuser
-			result, err := svc.GetUser(context.Background(), tt.userIDString)
-
-			// Assert results
-			if tt.expectedError {
-				if err == nil {
-					t.Errorf("expected error, got nil")
-				}
-				if tt.expectedErrorMsg != "" && err.Error() != tt.expectedErrorMsg {
-					t.Errorf("expected error message '%s', got '%s'", tt.expectedErrorMsg, err.Error())
-				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if result == nil {
-					t.Errorf("expected non-nil result")
-				}
-			}
+			testutil.Equal(t, result.ID, userID, "user id")
 		})
 	}
 }
 
 func TestGetUserContextCancellation(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	deps := newTestDeps(t)
 
-	mockRepo := mock.NewMockUserRepository(ctrl)
-	mockRefreshTokenRepo := mock.NewMockRefreshTokenRepository(ctrl)
-	tokenConfig := token.TokenConfig{
-		AccessTokenSecret:  "test-access-secret",
-		RefreshTokenSecret: "test-refresh-secret",
-	}
-	tokenSvc := token.NewTokenService(tokenConfig)
-
-	svc := NewUserService(mockRepo, mockRefreshTokenRepo, tokenSvc)
-
-	// Create a cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	result, err := svc.GetUser(ctx, uuid.New().String())
+	result, err := deps.service.GetUser(ctx, uuid.New().String())
 
-	if err == nil {
-		t.Errorf("expected context.Canceled error, got nil")
-	}
+	testutil.ErrorIs(t, err, context.Canceled)
 	if result != nil {
 		t.Errorf("expected nil result, got %v", result)
 	}

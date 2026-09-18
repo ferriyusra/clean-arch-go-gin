@@ -2,10 +2,11 @@ package user
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -19,7 +20,7 @@ func (r *GORMUserRepository) FindByID(ctx context.Context, id uuid.UUID) (*entit
 
 	var user entity.UserEntity
 	if err := r.db.WithContext(ctx).First(&user, id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("finding user by id: %w", err)

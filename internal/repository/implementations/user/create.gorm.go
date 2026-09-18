@@ -3,8 +3,8 @@ package user
 import (
 	"context"
 
-	"github.com/google/uuid"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/google/uuid"
 )
 
 // Create creates a new user in GORM

@@ -1,0 +1,225 @@
+package di_test
+
+import (
+	"net/http"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/api/middleware"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/di"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/platform"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/testutil"
+)
+
+// newTestContainer wires the whole application against an in-memory database.
+//
+// Nothing is mocked here: these tests drive real HTTP requests through the real
+// middleware chain, router, handlers, services and repositories, which is the
+// only way to catch wiring mistakes that unit tests cannot see.
+func newTestContainer(t *testing.T) *di.Container {
+	t.Helper()
+
+	gin.SetMode(gin.TestMode)
+
+	t.Setenv("DEV_MODE", "true")
+	cfg := platform.NewConfig()
+	cfg.Database.Gorm = testutil.NewDB(t)
+	// Rate limiting would otherwise make the outcome depend on how many
+	// requests a test happens to make.
+	cfg.Security.RateLimitEnabled = false
+
+	container, err := di.NewContainer(cfg, nil)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = container.Close() })
+
+	return container
+}
+
+// csrfToken fetches a token the way a browser client does.
+func csrfToken(t *testing.T, engine *gin.Engine) string {
+	t.Helper()
+
+	rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodGet, "/api/csrf", nil))
+	testutil.Equal(t, rec.Code, http.StatusOK, "csrf status")
+
+	return testutil.DataAs[response.CSRFTokenResponse](t, rec).Token
+}
+
+// TestFullAuthenticationFlow walks the journey a real client makes.
+func TestFullAuthenticationFlow(t *testing.T) {
+	container := newTestContainer(t)
+	engine := container.Router
+
+	csrf := csrfToken(t, engine)
+
+	// 1. Register.
+	registerRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+		"email":    "e2e@example.com",
+		"password": "password123",
+		"name":     "End To End",
+	}))
+	testutil.Equal(t, registerRec.Code, http.StatusCreated, "register status")
+
+	cookies := testutil.Cookies(registerRec)
+	accessToken := cookies[middleware.AccessTokenCookie].Value
+	testutil.True(t, accessToken != "", "register issues an access token")
+	testutil.True(t, cookies[middleware.RefreshTokenCookie].Value != "", "register issues a refresh token")
+
+	// 2. The access cookie authenticates a protected route.
+	meRec := testutil.Do(engine, testutil.WithCookie(
+		testutil.JSONRequest(t, http.MethodGet, "/api/auth/me", nil),
+		middleware.AccessTokenCookie, accessToken,
+	))
+	testutil.Equal(t, meRec.Code, http.StatusOK, "me status")
+	testutil.Equal(t, testutil.DataAs[response.GetUser](t, meRec).Email, "e2e@example.com", "email")
+
+	// 3. Registering the same address again is a conflict, not a bad request.
+	duplicateRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+		"email":    "e2e@example.com",
+		"password": "password123",
+		"name":     "Impostor",
+	}))
+	testutil.Equal(t, duplicateRec.Code, http.StatusConflict, "duplicate register status")
+
+	// 4. Login issues a fresh pair.
+	loginRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/login", map[string]string{
+		"email":    "e2e@example.com",
+		"password": "password123",
+	}))
+	testutil.Equal(t, loginRec.Code, http.StatusOK, "login status")
+	loginRefresh := testutil.Cookies(loginRec)[middleware.RefreshTokenCookie].Value
+
+	// 5. Refresh exchanges the refresh cookie for a new access token.
+	refreshReq := testutil.WithCookie(
+		testutil.JSONRequest(t, http.MethodPost, "/api/auth/refresh", nil),
+		middleware.RefreshTokenCookie, loginRefresh,
+	)
+	refreshReq.Header.Set("X-CSRF-Token", csrf)
+	testutil.Equal(t, testutil.Do(engine, refreshReq).Code, http.StatusOK, "refresh status")
+
+	// 6. Logout revokes the stored refresh tokens.
+	logoutReq := testutil.WithCookie(
+		testutil.JSONRequest(t, http.MethodPost, "/api/auth/logout", nil),
+		middleware.AccessTokenCookie, accessToken,
+	)
+	logoutReq.Header.Set("X-CSRF-Token", csrf)
+	testutil.Equal(t, testutil.Do(engine, logoutReq).Code, http.StatusOK, "logout status")
+
+	// 7. The revoked refresh token is no longer accepted, even though the JWT
+	// itself is still within its validity window.
+	afterLogout := testutil.WithCookie(
+		testutil.JSONRequest(t, http.MethodPost, "/api/auth/refresh", nil),
+		middleware.RefreshTokenCookie, loginRefresh,
+	)
+	afterLogout.Header.Set("X-CSRF-Token", csrf)
+	testutil.Equal(t, testutil.Do(engine, afterLogout).Code, http.StatusUnauthorized, "refresh after logout")
+}
+
+func TestProtectedRoutesRejectAnonymousRequests(t *testing.T) {
+	engine := newTestContainer(t).Router
+
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/auth/me"},
+		{http.MethodGet, "/api/counter"},
+	}
+
+	for _, route := range routes {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			rec := testutil.Do(engine, testutil.JSONRequest(t, route.method, route.path, nil))
+			testutil.Equal(t, rec.Code, http.StatusUnauthorized, "status")
+		})
+	}
+}
+
+// TestStateChangingRoutesRequireCSRF checks that the per-route CSRF middleware
+// is actually attached, which the handler tests cannot see.
+func TestStateChangingRoutesRequireCSRF(t *testing.T) {
+	engine := newTestContainer(t).Router
+
+	registerRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+		"email": "csrf@example.com", "password": "password123", "name": "CSRF User",
+	}))
+	testutil.Equal(t, registerRec.Code, http.StatusCreated, "register status")
+	accessToken := testutil.Cookies(registerRec)[middleware.AccessTokenCookie].Value
+
+	// Authenticated, but with no CSRF header.
+	rec := testutil.Do(engine, testutil.WithCookie(
+		testutil.JSONRequest(t, http.MethodPost, "/api/counter", nil),
+		middleware.AccessTokenCookie, accessToken,
+	))
+	testutil.Equal(t, rec.Code, http.StatusForbidden, "status without a CSRF token")
+
+	// The same request, with the header.
+	withToken := testutil.WithCookie(
+		testutil.JSONRequest(t, http.MethodPost, "/api/counter", nil),
+		middleware.AccessTokenCookie, accessToken,
+	)
+	withToken.Header.Set("X-CSRF-Token", csrfToken(t, engine))
+	okRec := testutil.Do(engine, withToken)
+
+	testutil.Equal(t, okRec.Code, http.StatusOK, "status with a CSRF token")
+	testutil.Equal(t, testutil.DataAs[response.GetCounter](t, okRec).Value, 1, "counter value")
+}
+
+func TestHealthEndpoints(t *testing.T) {
+	engine := newTestContainer(t).Router
+
+	for _, path := range []string{"/api/health", "/api/health/live", "/api/health/ready"} {
+		t.Run(path, func(t *testing.T) {
+			rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodGet, path, nil))
+			testutil.Equal(t, rec.Code, http.StatusOK, "status")
+			testutil.Equal(t, testutil.Envelope(t, rec).Success, true, "success flag")
+		})
+	}
+}
+
+// TestUnknownRoutesReturnTheEnvelope: clients parse the envelope on every
+// response, so a bare 404 with an empty body breaks them.
+func TestUnknownRoutesReturnTheEnvelope(t *testing.T) {
+	engine := newTestContainer(t).Router
+
+	rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodGet, "/api/does-not-exist", nil))
+
+	testutil.Equal(t, rec.Code, http.StatusNotFound, "status")
+	testutil.Equal(t, testutil.Envelope(t, rec).Message, "Route not found", "message")
+}
+
+func TestEveryResponseCarriesSecurityHeadersAndARequestID(t *testing.T) {
+	engine := newTestContainer(t).Router
+
+	rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodGet, "/api/message", nil))
+
+	testutil.Equal(t, rec.Header().Get("X-Content-Type-Options"), "nosniff", "nosniff header")
+	testutil.True(t, rec.Header().Get(middleware.RequestIDHeader) != "", "request id header")
+}
+
+func TestContainerRejectsAnInvalidConfiguration(t *testing.T) {
+	// Production mode with no secrets must fail at startup rather than quietly
+	// serving traffic signed with a development key.
+	t.Setenv("DEV_MODE", "false")
+	t.Setenv("JWT_ACCESS_SECRET", "")
+	t.Setenv("JWT_REFRESH_SECRET", "")
+	t.Setenv("CSRF_SECRET", "")
+
+	cfg := platform.NewConfig()
+	cfg.Database.Gorm = testutil.NewDB(t)
+
+	_, err := di.NewContainer(cfg, nil)
+	testutil.Error(t, err, "container with no secrets in production mode")
+}
+
+func TestContainerCloseLeavesAnInjectedDatabaseAlone(t *testing.T) {
+	// The harness owns the injected database and closes it in t.Cleanup, so the
+	// container must not close it out from under the test.
+	container := newTestContainer(t)
+
+	testutil.NoError(t, container.Close())
+
+	rec := testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, "/api/message", nil))
+	testutil.Equal(t, rec.Code, http.StatusOK, "the database still works after Close")
+}

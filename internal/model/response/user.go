@@ -9,16 +9,29 @@ type GetUser struct {
 	Name  string    `json:"name"`
 }
 
+// LoginResponse is returned by UserService.Login.
+//
+// The tokens are marked json:"-" on purpose: they reach the client as HttpOnly
+// cookies set by the handler and must never appear in a response body, but the
+// handler still needs them from the service.
 type LoginResponse struct {
-	User GetUser `json:"user"`
+	User         GetUser `json:"user"`
+	AccessToken  string  `json:"-"`
+	RefreshToken string  `json:"-"`
 }
 
+// RegisterResponse is returned by UserService.Register. See LoginResponse for
+// why the tokens are excluded from the JSON body.
 type RegisterResponse struct {
-	User GetUser `json:"user"`
+	User         GetUser `json:"user"`
+	AccessToken  string  `json:"-"`
+	RefreshToken string  `json:"-"`
 }
 
+// RefreshResponse carries a freshly minted access token, again destined for a
+// cookie rather than the response body.
 type RefreshResponse struct {
-	Message string `json:"message"`
+	AccessToken string `json:"-"`
 }
 
 type CSRFTokenResponse struct {

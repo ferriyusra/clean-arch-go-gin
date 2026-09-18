@@ -2,6 +2,7 @@ package refresh_token
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
@@ -18,7 +19,7 @@ func (r *GORMRefreshTokenRepository) FindByToken(ctx context.Context, tokenStrin
 
 	var token entity.RefreshTokenEntity
 	if err := r.db.WithContext(ctx).Where("token = ?", tokenString).First(&token).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("finding refresh token: %w", err)
