@@ -15,6 +15,9 @@ import (
 	"github.com/ferriyusra/clean-arch-go-gin/internal/tracing"
 )
 
+// Deliberately not parallel: tracing.Init installs the process-wide
+// OpenTelemetry propagator (and tracer provider when enabled), so every test
+// that calls it has to be serialised against the rest of this package.
 func TestInitDisabledIsANoOp(t *testing.T) {
 	shutdown, err := tracing.Init(context.Background(), tracing.Config{Enabled: false})
 	testutil.NoError(t, err)
@@ -26,6 +29,8 @@ func TestInitDisabledIsANoOp(t *testing.T) {
 	testutil.Equal(t, tracing.SpanIDFromContext(context.Background()), "", "span id")
 }
 
+// Not parallel, for the same reason as TestInitDisabledIsANoOp: Init writes the
+// global propagator before it ever looks at the exporter name.
 func TestInitRejectsAnUnknownExporter(t *testing.T) {
 	_, err := tracing.Init(context.Background(), tracing.Config{
 		Enabled:  true,
@@ -38,6 +43,8 @@ func TestInitRejectsAnUnknownExporter(t *testing.T) {
 // TestInitInstallsW3CPropagationEvenWhenDisabled is the reason the propagator
 // is set before the enabled check: a caller trace id must still reach the logs
 // and the error response of a service that produces no spans itself.
+//
+// Not parallel: it both writes and reads otel's global propagator.
 func TestInitInstallsW3CPropagationEvenWhenDisabled(t *testing.T) {
 	_, err := tracing.Init(context.Background(), tracing.Config{Enabled: false})
 	testutil.NoError(t, err)
@@ -59,7 +66,12 @@ func TestInitInstallsW3CPropagationEvenWhenDisabled(t *testing.T) {
 	testutil.Equal(t, tracing.SpanIDFromContext(ctx), spanID, "extracted span id")
 }
 
+// Safe to parallelise: this one drives a locally constructed provider and never
+// touches otel's globals. Go resumes parallel tests only once every sequential
+// test in the package has finished, so it cannot overlap the Init tests above.
 func TestTraceIDFromContextWithARecordedSpan(t *testing.T) {
+	t.Parallel()
+
 	exporter := tracetest.NewInMemoryExporter()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -78,6 +90,8 @@ func TestTraceIDFromContextWithARecordedSpan(t *testing.T) {
 }
 
 func TestRecordErrorMarksTheSpanFailed(t *testing.T) {
+	t.Parallel()
+
 	exporter := tracetest.NewInMemoryExporter()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -95,6 +109,8 @@ func TestRecordErrorMarksTheSpanFailed(t *testing.T) {
 // RecordError must tolerate an untraced context, because handler.Fail calls it
 // on every 5xx whether or not tracing is enabled.
 func TestRecordErrorOnAnUntracedContextIsSafe(t *testing.T) {
+	t.Parallel()
+
 	tracing.RecordError(context.Background(), errors.New("boom"), "it broke")
 	tracing.SetAttributes(context.Background())
 }

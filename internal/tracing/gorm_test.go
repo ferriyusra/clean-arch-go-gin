@@ -26,6 +26,11 @@ const secretEmail = "do-not-leak@example.com"
 
 // tracedServer wires the real middleware chain and a real database, both
 // instrumented, against an in-memory span exporter.
+//
+// It swaps otel's global tracer provider and restores it on cleanup, so none of
+// the tests built on it may call t.Parallel(): two of them running at once
+// would export each other's spans, and whichever finished first would restore
+// the provider out from under the other.
 func tracedServer(t *testing.T) (*gin.Engine, *tracetest.InMemoryExporter) {
 	t.Helper()
 

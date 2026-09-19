@@ -12,6 +12,8 @@ import (
 )
 
 func TestParseLevel(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		in   string
 		want slog.Level
@@ -27,12 +29,16 @@ func TestParseLevel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
+			t.Parallel()
+
 			testutil.Equal(t, logging.ParseLevel(tt.in), tt.want, "level")
 		})
 	}
 }
 
 func TestNewRespectsFormatAndLevel(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := logging.New(logging.Options{Level: "warn", Format: "json", Output: &buf})
 
@@ -46,6 +52,8 @@ func TestNewRespectsFormatAndLevel(t *testing.T) {
 }
 
 func TestNewDefaultsToText(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logging.New(logging.Options{Level: "info", Format: "text", Output: &buf}).Info("hello")
 
@@ -56,6 +64,8 @@ func TestNewDefaultsToText(t *testing.T) {
 // repositories call it on contexts that never passed through the middleware,
 // such as in unit tests and background jobs.
 func TestFromContextFallsBackToTheDefault(t *testing.T) {
+	t.Parallel()
+
 	if logging.FromContext(context.Background()) == nil {
 		t.Errorf("expected a usable logger for a bare context")
 	}
@@ -66,6 +76,8 @@ func TestFromContextFallsBackToTheDefault(t *testing.T) {
 }
 
 func TestIntoAndFromContextRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := logging.New(logging.Options{Level: "debug", Format: "json", Output: &buf}).
 		With("request_id", "abc-123")
@@ -77,6 +89,8 @@ func TestIntoAndFromContextRoundTrip(t *testing.T) {
 }
 
 func TestIntoIgnoresANilLogger(t *testing.T) {
+	t.Parallel()
+
 	ctx := logging.Into(context.Background(), nil)
 
 	if logging.FromContext(ctx) == nil {

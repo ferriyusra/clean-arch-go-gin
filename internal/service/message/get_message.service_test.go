@@ -10,6 +10,8 @@ import (
 )
 
 func TestGetMessage(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
 		mockReturn    *string
@@ -48,6 +50,8 @@ func TestGetMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
@@ -79,6 +83,8 @@ func TestGetMessage(t *testing.T) {
 }
 
 func TestGetMessageWithContext(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
 		contextSetup  func() context.Context
@@ -131,6 +137,8 @@ func TestGetMessageWithContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 

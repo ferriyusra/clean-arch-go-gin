@@ -6,6 +6,8 @@ import (
 )
 
 func TestGenerateToken(t *testing.T) {
+	t.Parallel()
+
 	service := NewCSRFService("test-secret", testCSRFTTL)
 	token, err := service.GenerateToken()
 
@@ -39,6 +41,8 @@ func TestGenerateToken(t *testing.T) {
 }
 
 func TestGenerateTokenUniqueness(t *testing.T) {
+	t.Parallel()
+
 	service := NewCSRFService("test-secret", testCSRFTTL)
 
 	token1, _ := service.GenerateToken()
@@ -50,6 +54,8 @@ func TestGenerateTokenUniqueness(t *testing.T) {
 }
 
 func TestGenerateTokenRandomness(t *testing.T) {
+	t.Parallel()
+
 	service := NewCSRFService("test-secret", testCSRFTTL)
 	tokens := make(map[string]bool)
 
@@ -66,5 +72,22 @@ func TestGenerateTokenRandomness(t *testing.T) {
 
 	if len(tokens) != 100 {
 		t.Errorf("expected 100 unique tokens, got %d", len(tokens))
+	}
+}
+
+// BenchmarkGenerateToken measures minting one CSRF token: 32 random bytes plus
+// an HMAC-SHA256 and three hex encodings. Clients fetch one from GET /api/csrf.
+func BenchmarkGenerateToken(b *testing.B) {
+	service := NewCSRFService("bench-csrf-secret", testCSRFTTL)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		token, err := service.GenerateToken()
+		if err != nil {
+			b.Fatalf("generating CSRF token: %v", err)
+		}
+		benchToken = token
 	}
 }

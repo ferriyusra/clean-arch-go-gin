@@ -9,6 +9,8 @@ import (
 )
 
 func TestGenerateAccessToken(t *testing.T) {
+	t.Parallel()
+
 	testUserID := uuid.New()
 
 	tests := []struct {
@@ -49,6 +51,8 @@ func TestGenerateAccessToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			service := NewTokenService(tt.config)
 			tokenString, err := service.GenerateAccessToken(tt.userID, tt.email, tt.userName)
 
@@ -88,6 +92,8 @@ func TestGenerateAccessToken(t *testing.T) {
 }
 
 func TestGenerateAccessTokenWithEmptySecret(t *testing.T) {
+	t.Parallel()
+
 	service := NewTokenService(TokenConfig{
 		AccessTokenSecret:  "",
 		AccessTokenExpiry:  15 * time.Minute,
@@ -106,6 +112,8 @@ func TestGenerateAccessTokenWithEmptySecret(t *testing.T) {
 }
 
 func TestGenerateAccessTokenClaimsExpiry(t *testing.T) {
+	t.Parallel()
+
 	expiry := 15 * time.Minute
 	service := NewTokenService(TokenConfig{
 		AccessTokenSecret:  "test-secret",
@@ -133,5 +141,24 @@ func TestGenerateAccessTokenClaimsExpiry(t *testing.T) {
 		if diff < -1*time.Second || diff > 1*time.Second {
 			t.Errorf("IssuedAt mismatch")
 		}
+	}
+}
+
+// BenchmarkGenerateAccessToken measures minting one access token. Register,
+// login and every refresh mint one, so its allocation profile sits on the hot
+// path of the auth endpoints.
+func BenchmarkGenerateAccessToken(b *testing.B) {
+	service := NewTokenService(benchTokenConfig())
+	userID := uuid.New()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		token, err := service.GenerateAccessToken(userID, "bench@example.com", "Bench User")
+		if err != nil {
+			b.Fatalf("generating access token: %v", err)
+		}
+		benchToken = token
 	}
 }

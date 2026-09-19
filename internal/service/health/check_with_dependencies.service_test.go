@@ -7,6 +7,8 @@ import (
 )
 
 func TestCheckWithDependencies(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name            string
 		checks          map[string]func(context.Context) error
@@ -106,6 +108,8 @@ func TestCheckWithDependencies(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			svc := NewHealthService()
 			status, err := svc.CheckWithDependencies(context.Background(), tt.checks)
 
@@ -139,6 +143,8 @@ func TestCheckWithDependencies(t *testing.T) {
 }
 
 func TestCheckWithDependenciesWithContext(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		contextSetup   func() context.Context
@@ -178,6 +184,8 @@ func TestCheckWithDependenciesWithContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			ctx := tt.contextSetup()
 			svc := NewHealthService()
 			status, err := svc.CheckWithDependencies(ctx, tt.checks)

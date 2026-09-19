@@ -6,6 +6,8 @@ import (
 )
 
 func TestCheck(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name            string
 		contextSetup    func() context.Context
@@ -57,6 +59,8 @@ func TestCheck(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			svc := NewHealthService()
 			ctx := tt.contextSetup()
 
@@ -85,6 +89,8 @@ func TestCheck(t *testing.T) {
 }
 
 func TestCheckMultipleCalls(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		callCount int
@@ -105,6 +111,8 @@ func TestCheckMultipleCalls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			svc := NewHealthService()
 
 			for i := 0; i < tt.callCount; i++ {
