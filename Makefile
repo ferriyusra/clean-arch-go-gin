@@ -24,9 +24,15 @@ endif
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
+# Fuzzing knobs. `go test -fuzz` accepts exactly one target per package
+# invocation, so the package and the target are variables rather than a loop.
+PKG      ?= ./internal/service/csrf
+FUZZ     ?= Fuzz
+FUZZTIME ?= 30s
+
 .PHONY: help install-deps dev server build test test-verbose test-race test-coverage \
-        lint fmt vet tidy-check mocks repository-mocks service-mocks verify-mocks \
-        docker-build docker-up docker-down clean ci
+        bench fuzz vuln lint fmt vet tidy-check mocks repository-mocks service-mocks \
+        verify-mocks docker-build docker-up docker-down clean ci
 
 help:
 	@echo "Available commands:"
@@ -37,6 +43,9 @@ help:
 	@echo "  make test           - Run all tests (works without a C toolchain)"
 	@echo "  make test-race      - Run all tests with the race detector (needs CGO + gcc/clang)"
 	@echo "  make test-coverage  - Run tests and write coverage.html"
+	@echo "  make bench          - Run every benchmark with allocation counts"
+	@echo "  make fuzz           - Fuzz one target: make fuzz PKG=./internal/service/csrf FUZZ=FuzzValidate FUZZTIME=30s"
+	@echo "  make vuln           - Scan dependencies with govulncheck"
 	@echo "  make lint           - Run golangci-lint"
 	@echo "  make fmt            - Format all Go files"
 	@echo "  make vet            - Run go vet"
@@ -78,6 +87,31 @@ test-coverage:
 	go test -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 	@go tool cover -func=coverage.out | tail -1
+
+# -run '^$$' keeps the unit tests out of the timing numbers; -benchmem is what
+# makes an allocation regression visible. A package with no benchmarks simply
+# reports "no tests to run" and the target stays green.
+bench:
+	go test -run '^$$' -bench . -benchmem ./...
+
+# `go test -fuzz` takes exactly one target per package invocation, hence the
+# PKG/FUZZ/FUZZTIME variables. The target is resolved with `-list` first so that
+# a package which has no matching fuzz target yet is reported and skipped
+# instead of failing the build.
+fuzz:
+	@matches=$$(go test -list '$(FUZZ)' $(PKG) 2>/dev/null | grep -E '^Fuzz' || true); \
+	if [ -z "$$matches" ]; then \
+		echo "No fuzz target matching '$(FUZZ)' in $(PKG) - nothing to fuzz."; \
+		exit 0; \
+	fi; \
+	target=$$(echo "$$matches" | head -1); \
+	echo "Fuzzing $$target in $(PKG) for $(FUZZTIME)..."; \
+	go test -run '^$$' -fuzz "^$$target$$" -fuzztime $(FUZZTIME) $(PKG)
+
+# Pulled on demand rather than installed globally, the same way go.mod's `tool`
+# directive keeps mockgen and air out of the developer's PATH.
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 lint:
 	golangci-lint run ./...

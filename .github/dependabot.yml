@@ -1,0 +1,37 @@
+# Minor and patch bumps are grouped into a single PR per ecosystem: they are
+# almost always safe, and one weekly PR that CI either passes or fails is far
+# cheaper to review than a dozen. Major bumps are deliberately left out of the
+# groups so Dependabot opens them one at a time, where a breaking change can be
+# read and tested on its own.
+version: 2
+
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      go-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
