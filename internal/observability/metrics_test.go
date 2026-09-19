@@ -2,6 +2,7 @@ package observability_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -225,4 +226,64 @@ func TestNewMetricsIncludesRuntimeCollectors(t *testing.T) {
 	for _, want := range []string{"go_goroutines", "go_memstats_alloc_bytes", "go_gc_duration_seconds"} {
 		testutil.True(t, names[want], "runtime collector exports "+want)
 	}
+}
+
+// TestMethodLabelIsBounded is the cardinality guard on the method label.
+//
+// The route label has one (RouteUnmatched); without this the method label has
+// none. net/http only checks that a method is a valid HTTP token, not that it
+// is a verb anyone has heard of, so an unauthenticated caller can mint a new
+// time series per request simply by inventing one — unbounded, and enough to
+// take the Prometheus server down.
+func TestMethodLabelIsBounded(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		want   string
+	}{
+		{"a standard verb is kept", http.MethodGet, http.MethodGet},
+		{"an uncommon but standard verb is kept", http.MethodTrace, http.MethodTrace},
+		{"an invented verb collapses", "SLURP", observability.MethodOther},
+		{"a short invented verb collapses", "A1", observability.MethodOther},
+		{"lowercase is not a standard verb", "get", observability.MethodOther},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			metrics := newIsolatedMetrics(t)
+			r := gin.New()
+			r.Use(metrics.Middleware())
+
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(tt.method, "/whatever", nil))
+
+			find(t, metrics, "http_requests_total", map[string]string{
+				"method": tt.want,
+				"route":  observability.RouteUnmatched,
+			})
+		})
+	}
+}
+
+// TestInventedMethodsShareOneSeries proves the bound rather than the mapping:
+// many distinct invented verbs must collapse onto a single series, not one
+// series each. This is the assertion that actually catches a regression.
+func TestInventedMethodsShareOneSeries(t *testing.T) {
+	t.Parallel()
+
+	metrics := newIsolatedMetrics(t)
+	r := gin.New()
+	r.Use(metrics.Middleware())
+
+	for _, verb := range []string{"SLURP", "FLOOP", "BLORP", "A1", "B2", "C3"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(verb, "/whatever", nil))
+	}
+
+	series := gather(t, metrics, "http_requests_total")
+	testutil.Equal(t, len(series), 1, "six invented verbs collapse onto one time series")
 }

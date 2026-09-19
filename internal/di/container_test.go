@@ -475,3 +475,76 @@ func TestPprofIsAbsentFromTheAdminListenerWhenDisabled(t *testing.T) {
 
 	testutil.Equal(t, rec.Code, http.StatusNotFound, "pprof must be absent when disabled")
 }
+
+// TestPanickedRequestsAreCounted pins the middleware ordering.
+//
+// A panic unwinds the stack through every c.Next() above it. The metrics
+// middleware records after its c.Next() and has no defer, so if it sits INSIDE
+// Recovery the recording code is skipped entirely and the request is counted
+// zero times — leaving the metrics blind to the single worst failure mode the
+// service has. Registering it OUTSIDE Recovery means Recovery returns normally
+// and the recording code observes the real 500.
+//
+// Note a defer inside the middleware would not fix this: it would run during
+// unwinding, before Recovery writes the 500, and observe a 200.
+func TestPanickedRequestsAreCounted(t *testing.T) {
+	t.Setenv("METRICS_ENABLED", "true")
+
+	container := newTestContainer(t)
+	container.Router.GET("/boom", func(*gin.Context) { panic("boom") })
+
+	rec := testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, "/boom", nil))
+	testutil.Equal(t, rec.Code, http.StatusInternalServerError, "recovered status")
+
+	scrape := httptest.NewRecorder()
+	container.AdminServer.Handler.ServeHTTP(scrape, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	body := scrape.Body.String()
+	if !strings.Contains(body, `route="/boom"`) || !strings.Contains(body, `status="500"`) {
+		t.Errorf("the panicked request was not counted; scrape:\n%s", body)
+	}
+}
+
+// TestWrongMethodReturns405 pins HandleMethodNotAllowed.
+//
+// gin leaves that flag off by default, which makes SetupFallbacks' NoMethod
+// handler dead code and answers a wrong verb with 404 "Route not found". That
+// tells a client the path does not exist when the path is fine and only the
+// method is wrong — and docs/openapi.yaml documents a 405 the service would
+// then never emit.
+func TestWrongMethodReturns405(t *testing.T) {
+	container := newTestContainer(t)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"a verb the path does not serve", http.MethodDelete, "/api/v1/message"},
+		{"a write verb on a read-only health probe", http.MethodPost, "/api/health/live"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := testutil.Do(container.Router, testutil.JSONRequest(t, tt.method, tt.path, nil))
+
+			testutil.Equal(t, rec.Code, http.StatusMethodNotAllowed, "status")
+			if !strings.Contains(rec.Body.String(), "Method not allowed") {
+				t.Errorf("expected the standard envelope, got: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestUnknownPathStillReturns404 is the other half: enabling 405 must not turn
+// a genuinely missing path into one.
+func TestUnknownPathStillReturns404(t *testing.T) {
+	container := newTestContainer(t)
+
+	rec := testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, "/api/v1/nothing-here", nil))
+
+	testutil.Equal(t, rec.Code, http.StatusNotFound, "status")
+	if !strings.Contains(rec.Body.String(), "Route not found") {
+		t.Errorf("expected the standard envelope, got: %s", rec.Body.String())
+	}
+}

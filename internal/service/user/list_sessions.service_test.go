@@ -2,7 +2,9 @@ package user
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,9 +141,13 @@ func TestListSessionsWithNoRefreshTokenMarksNothingCurrent(t *testing.T) {
 	}
 }
 
-// TestListSessionsNeverExposesTheTokenDigest is a security regression test. The
-// stored digest is the only thing between a leaked row and a replayable
-// credential, and response.Session has no field that could carry it.
+// TestListSessionsNeverExposesTheTokenDigest is a security regression test.
+//
+// The repository hands the service a row that really does carry the digest, and
+// the assertion is made on the serialised output — so a new field carrying
+// row.TokenHash fails this test no matter what it is called. The end-to-end
+// version in internal/di does the same against real database rows; this one
+// catches it a layer earlier, before a route is involved.
 func TestListSessionsNeverExposesTheTokenDigest(t *testing.T) {
 	deps := newTestDeps(t)
 	userID := uuid.New()
@@ -154,12 +160,19 @@ func TestListSessionsNeverExposesTheTokenDigest(t *testing.T) {
 	result, err := deps.service.ListSessions(context.Background(), userID, "", request.Pagination{})
 	testutil.NoError(t, err)
 
-	// The handler test asserts the same thing on serialised JSON; this one
-	// catches a field added to the struct before it ever reaches a route.
-	for _, session := range result.Sessions {
-		testutil.True(t, session.ID != uuid.Nil, "the session is identified by its own id")
-	}
 	testutil.Equal(t, len(result.Sessions), 1, "session count")
+
+	// The digest really is in the row the repository returned, so this searches
+	// for it where it would actually surface: the serialised form. Asserting on
+	// struct fields instead would pass for any field the assertion did not
+	// happen to name, which is the failure mode a leak test exists to prevent.
+	encoded, err := json.Marshal(result.Sessions)
+	testutil.NoError(t, err)
+
+	testutil.True(t, !strings.Contains(string(encoded), secretHash),
+		"the digest does not survive serialisation")
+	testutil.True(t, !strings.Contains(string(encoded), secretHash[:8]),
+		"not even a prefix of the digest survives")
 }
 
 func TestListSessionsReportsRepositoryFailures(t *testing.T) {
