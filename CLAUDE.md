@@ -9,7 +9,7 @@ make dev               # Start server with hot-reload (air via `go tool`, DEV_MO
 make server            # Run server directly (DEV_MODE=true)
 make build             # Build ./bin/server-$GOOS-$GOARCH (-trimpath, -ldflags version stamp)
 make test              # go test -cover ./...            (no cgo needed)
-make test-race         # CGO_ENABLED=1 go test -race ./...
+make test-race         # CGO_ENABLED=1 go test -race -cover ./... (needs gcc)
 make test-coverage     # coverage.out + coverage.html, with -coverpkg=./...
 make lint              # golangci-lint run ./...
 make mocks             # Regenerate BOTH repository and service mocks
@@ -102,12 +102,16 @@ Cross-cutting facts that are not visible from a single file:
   the `context.Context` and repositories pick it up through `dbtx.Conn(ctx,
   r.db)`, so no repository signature mentions it. Nested calls reuse the outer
   transaction rather than opening a second one, which sqlite would block on.
-  `Register` and `Refresh` both rely on this.
+  Four call sites rely on it: `Register`, `Refresh`, `ChangePassword` and
+  `DeleteAccount`. A single-statement write is not wrapped — it is already
+  atomic and the transaction would only buy a round trip.
 - **The container can reuse an injected DB**: it only calls
   `platform.InitializeDatabase` when `cfg.Database.Gorm` is nil, and
   `Container.Close()` then leaves that injected handle alone. Tests rely on this.
-- **Every service method starts with a `select { case <-ctx.Done(): ... }` guard**,
-  and every service has a test that cancels the context.
+- **Service methods that do real work start with a `select { case <-ctx.Done(): ... }`
+  guard.** Thin pass-throughs such as `counter.GetCounter` and `message.GetMessage`
+  leave it out and rely on the repository's own guard. Either way every service
+  has a test that cancels the context — that part has no exceptions.
 - **The logger travels in `context.Context`**, never in constructor arguments:
   `middleware.RequestID` puts a request-scoped `*slog.Logger` there and any layer
   reads it with `logging.FromContext(ctx)`.
@@ -132,6 +136,19 @@ Cross-cutting facts that are not visible from a single file:
   listener, built in `di.NewContainer` and started by `Container.StartAdmin`.
   `Config.Validate` refuses to bind pprof to a non-loopback address outside
   DEV_MODE: it hands an unauthenticated caller a heap dump and a 30s CPU stall.
+- **The metrics middleware sits OUTSIDE `Recovery`, and the order is load-bearing.**
+  A panic unwinds through every `c.Next()` above it, and the middleware records
+  after its own `c.Next()` with no `defer` — so from inside `Recovery` a
+  panicked request is counted zero times. A `defer` would not fix it either: it
+  runs during unwinding, before `Recovery` writes the 500, and would record 200.
+  `TestPanickedRequestsAreCounted` pins this.
+- **Both metric labels are bounded.** `route` uses `c.FullPath()` with
+  `"unmatched"` as the fallback, and `method` is whitelisted to the standard
+  verbs with `"other"` for the rest — `net/http` accepts any HTTP token as a
+  method, so without that an anonymous caller mints unbounded time series.
+- **`r.HandleMethodNotAllowed = true`** in `newRouter`. gin leaves it off, which
+  makes `SetupFallbacks`' `NoMethod` handler dead code and answers a wrong verb
+  with 404 — telling a client the path does not exist when only the verb is wrong.
 - **`gorm.Config.TranslateError` is on**, in production and in `testutil.NewDB`
   alike. It is what turns a unique-index violation into `gorm.ErrDuplicatedKey`
   so a service can answer 409 instead of 500. Turning it off silently converts

@@ -1,6 +1,11 @@
 # Authentication System
 
-This document describes the authentication system for the Go + Vite + React application.
+This document describes the authentication system for this Go API.
+
+There is no frontend in this repository — it is the backend-only extraction of a
+larger project. The browser-side snippets below are written for whatever client
+you put in front of it, and are kept because the cookie and CSRF handling they
+show is the part that is easy to get wrong.
 
 ## Overview
 
@@ -11,10 +16,9 @@ The authentication system is designed as a **pure API concern** with the fronten
 - **CSRF protection** with `SameSite=Lax` and token-based validation
 - **Bcrypt password hashing** with default cost factor
 
-This approach works identically in:
-- Vite dev mode with proxy
-- Embedded single-binary production
-- Detached frontend + API later
+This approach works identically whether the client is served from the same
+origin, from a dev server proxying to this API, or from a separate domain
+altogether — the last of which needs the origin listed in `ALLOWED_ORIGINS`.
 
 ## Architecture Principles
 
@@ -29,8 +33,8 @@ This approach works identically in:
 
 | Concern | Cookies | Bearer Tokens |
 |---------|---------|---------------|
-| Vite dev proxy | ✅ Automatic | ⚠️ CORS headers needed |
-| Embedded prod | ✅ Seamless | ✅ Works |
+| Same-origin or proxied client | ✅ Automatic | ⚠️ CORS headers needed |
+| Single-binary deployment | ✅ Seamless | ✅ Works |
 | XSS resistance | ✅ HttpOnly flag | ❌ Token readable |
 | CSRF protection | ✅ Built-in | ⚠️ Manual handling |
 | Detaching frontend | ✅ No changes | ⚠️ More config |
@@ -110,8 +114,8 @@ Register a new user account.
   "success": false,
   "message": "Validation failed",
   "errors": {
-    "email": "Email is required",
-    "password": "Password is required"
+    "email": "This field is required",
+    "password": "This field is required"
   }
 }
 ```
@@ -426,11 +430,17 @@ can be restored.
 ```json
 {
   "sub": "550e8400-e29b-41d4-a716-446655440000",
+  "jti": "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
   "iat": 1699500000,
   "exp": 1699608000,
   "iss": "go-vite-react"
 }
 ```
+
+`jti` is load-bearing rather than decorative. Without a random token id, two
+refresh tokens minted for the same user in the same second would be byte for
+byte identical — so rotation would hand back the token it was supposed to
+replace, and the digest of the old one would still match the new one.
 
 ---
 
@@ -708,18 +718,17 @@ async function makeStateChangingRequest(method: 'POST' | 'PUT' | 'DELETE', url: 
 ### Starting the App
 
 ```bash
-# Terminal 1: Backend
-go run ./cmd/server
-
-# Terminal 2: Frontend (in another terminal)
-cd frontend
-npm run dev
+make dev      # hot reload via air, DEV_MODE=true
+# or
+make server   # plain go run
 ```
 
-The auth flow works exactly the same as production:
-- Vite proxy forwards `/api/*` to Go backend
-- Cookies are handled automatically by the browser
-- No special dev configuration needed
+`DEV_MODE=true` substitutes throwaway secrets and drops the cookie `Secure`
+flag, which is what lets the flow work over plain HTTP on localhost.
+
+If you run a browser client on another port, add its origin to
+`ALLOWED_ORIGINS` and send credentialed requests (`credentials: "include"` in
+`fetch`); cookies are handled by the browser from there.
 
 ### Testing with cURL
 
@@ -797,13 +806,15 @@ curl -X DELETE http://localhost:8080/api/v1/auth/me \
 
 - [ ] **Change JWT secrets** — Generate new values with `openssl rand -base64 32`
 - [ ] **Enable HTTPS** — Set `Secure: true` on cookies
-- [ ] **Set strong secrets** — At least 32 bytes of randomness
+- [ ] **Set strong secrets** — at least 32 characters; `Config.Validate` counts
+      characters, not bytes of entropy, so use `openssl rand -base64 32`
 - [ ] **Check the rate limits** — on by default, with a tighter budget on the
       credential endpoints; tune `AUTH_RATE_LIMIT_RPS` / `AUTH_RATE_LIMIT_BURST`
       rather than turning them off
 - [ ] **Monitor failed logins** — Detect brute force attempts
-- [ ] **Use HTTPS in Vite** — For prod-like testing
-- [ ] **Configure CORS** — If frontend is detached
+- [ ] **Serve the client over HTTPS too** — cookies are `Secure` outside
+      DEV_MODE, so a plain-HTTP client will not receive them
+- [ ] **Configure CORS** — set `ALLOWED_ORIGINS` if the client is on another origin
 
 ---
 

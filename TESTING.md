@@ -71,8 +71,10 @@ Note what is *not* mocked: the token service. It is pure and deterministic, so
 mocking it would assert that the mock was called rather than that the code
 works. Mock things that do I/O; use the real thing otherwise.
 
-Every service method starts with a `ctx.Done()` guard, and every service has a
-test that cancels the context and asserts the guard fires.
+Service methods that do real work start with a `ctx.Done()` guard. Thin
+pass-throughs such as `counter.GetCounter` and `message.GetMessage` leave it out
+and rely on the repository's own guard — `internal/service/README.md` has the
+rule in full. Every service has a test that cancels the context regardless.
 
 ## 2. Repository tests — real sqlite, in memory
 
