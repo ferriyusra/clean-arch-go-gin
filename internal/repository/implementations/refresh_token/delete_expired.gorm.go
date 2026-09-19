@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/dbtx"
 )
 
 // DeleteExpired removes every token that expired before the given instant.
@@ -16,7 +18,7 @@ func (r *GORMRefreshTokenRepository) DeleteExpired(ctx context.Context, before t
 	default:
 	}
 
-	result := r.db.WithContext(ctx).
+	result := dbtx.Conn(ctx, r.db).
 		Where("expires_at < ?", before).
 		Delete(&entity.RefreshTokenEntity{})
 	if result.Error != nil {

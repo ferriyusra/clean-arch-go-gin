@@ -8,6 +8,8 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/dbtx"
 )
 
 // FindByTokenHash finds a stored refresh token by its digest.
@@ -23,7 +25,7 @@ func (r *GORMRefreshTokenRepository) FindByTokenHash(ctx context.Context, tokenH
 	}
 
 	var token entity.RefreshTokenEntity
-	if err := r.db.WithContext(ctx).Where("token_hash = ?", tokenHash).First(&token).Error; err != nil {
+	if err := dbtx.Conn(ctx, r.db).Where("token_hash = ?", tokenHash).First(&token).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}

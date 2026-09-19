@@ -5,6 +5,8 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/dbtx"
 )
 
 // IncrementCounter increments the counter in GORM and returns the new value
@@ -18,7 +20,7 @@ func (r *GORMCounterRepository) IncrementCounter(ctx context.Context) (int, erro
 	var counter CounterModel
 
 	// Use a transaction to atomically read and update the counter
-	if err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if err := dbtx.Conn(ctx, r.db).Transaction(func(tx *gorm.DB) error {
 		// Read current value with row-level lock
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&counter).Error; err != nil {
 			return err

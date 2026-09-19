@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"gorm.io/gorm"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/dbtx"
 )
 
 // GetMessage returns a stored message from GORM
@@ -17,7 +19,7 @@ func (r *GORMMessageRepository) GetMessage(ctx context.Context, key string) (*st
 	}
 
 	var message MessageModel
-	if err := r.db.WithContext(ctx).Where("key = ?", key).First(&message).Error; err != nil {
+	if err := dbtx.Conn(ctx, r.db).Where("key = ?", key).First(&message).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}

@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/dbtx"
 )
 
 // DeleteByTokenHash removes a single stored refresh token.
@@ -18,7 +20,7 @@ func (r *GORMRefreshTokenRepository) DeleteByTokenHash(ctx context.Context, toke
 	default:
 	}
 
-	if err := r.db.WithContext(ctx).
+	if err := dbtx.Conn(ctx, r.db).
 		Where("token_hash = ?", tokenHash).
 		Delete(&entity.RefreshTokenEntity{}).Error; err != nil {
 		return fmt.Errorf("deleting refresh token: %w", err)

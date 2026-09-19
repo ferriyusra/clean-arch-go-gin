@@ -5,6 +5,8 @@ import (
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	"github.com/google/uuid"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/dbtx"
 )
 
 // Create creates a new user in GORM
@@ -15,7 +17,7 @@ func (r *GORMUserRepository) Create(ctx context.Context, user entity.UserEntity)
 	default:
 	}
 
-	if err := r.db.WithContext(ctx).Create(&user).Error; err != nil {
+	if err := dbtx.Conn(ctx, r.db).Create(&user).Error; err != nil {
 		return nil, err
 	}
 
