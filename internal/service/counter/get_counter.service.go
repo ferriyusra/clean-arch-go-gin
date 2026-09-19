@@ -2,7 +2,9 @@ package counter
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
 )
 
@@ -10,7 +12,7 @@ import (
 func (s *counterService) GetCounter(ctx context.Context) (*response.GetCounter, error) {
 	value, err := s.repo.GetCounter(ctx)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Internal(fmt.Errorf("reading counter: %w", err))
 	}
 	return &response.GetCounter{
 		Value: value,

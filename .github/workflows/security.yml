@@ -1,0 +1,31 @@
+# Kept separate from ci.yml on purpose: this workflow needs a `schedule`
+# trigger, and adding one to ci.yml would drag the whole build/test/lint matrix
+# into a weekly cron run for no benefit. A vulnerability can also be published
+# long after the last commit, so scanning only on push/PR goes stale — the
+# weekly run is what catches that.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays at 06:00 UTC.
+    - cron: "0 6 * * 1"
+
+# govulncheck only reads the checked-out source and the module proxy.
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      # The action checks out the repo and runs setup-go itself, so no separate
+      # checkout/setup-go steps are needed here.
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
+          go-package: ./...

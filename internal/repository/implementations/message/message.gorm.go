@@ -1,9 +1,9 @@
 package message
 
 import (
-	"github.com/google/uuid"
-	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	"gorm.io/gorm"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 )
 
 // GORMMessageRepository is a GORM implementation of MessageRepository
@@ -14,21 +14,11 @@ type GORMMessageRepository struct {
 // MessageModel represents the message table schema
 type MessageModel = entity.MessageEntity
 
-// NewGORMMessageRepository creates a new GORM message repository
-func NewGORMMessageRepository(db *gorm.DB) (*GORMMessageRepository, error) {
-	// Auto-migrate the schema
-	if err := db.AutoMigrate(&MessageModel{}); err != nil {
-		return nil, err
-	}
-
-	// Initialize counter if it doesn't exist
-	var count int64
-	db.Model(&MessageModel{}).Count(&count)
-	if count == 0 {
-		db.Create(&MessageModel{ID: uuid.New(), Key: "default", Value: "Welcome to Clean Go Vite React!"})
-	}
-
+// NewGORMMessageRepository creates a new GORM message repository.
+//
+// Schema migration and seeding of the default message live in platform.Migrate.
+func NewGORMMessageRepository(db *gorm.DB) *GORMMessageRepository {
 	return &GORMMessageRepository{
 		db: db,
-	}, nil
+	}
 }

@@ -9,8 +9,8 @@ import (
 
 // UserEntity represents a user in the system
 type UserEntity struct {
-	ID        uuid.UUID      `gorm:"primaryKey"`
-	Email     string         `gorm:"uniqueIndex"`
+	ID        uuid.UUID `gorm:"primaryKey"`
+	Email     string    `gorm:"uniqueIndex"`
 	Password  []byte
 	Name      string
 	CreatedAt time.Time

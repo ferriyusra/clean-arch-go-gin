@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/dbtx"
 )
 
 // Delete deletes a user in GORM
@@ -14,7 +16,7 @@ func (r *GORMUserRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	default:
 	}
 
-	if err := r.db.WithContext(ctx).Delete(&UserModel{}, id).Error; err != nil {
+	if err := dbtx.Conn(ctx, r.db).Delete(&UserModel{}, id).Error; err != nil {
 		return err
 	}
 

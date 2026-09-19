@@ -6,13 +6,16 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/request"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
-	"golang.org/x/crypto/bcrypt"
 )
 
-// Register creates a new user account and returns user info (tokens set via cookies in handler)
+// Register creates a new user account and issues its first token pair.
 func (s *userService) Register(ctx context.Context, req *request.RegisterUserRequest) (*response.RegisterResponse, error) {
 	select {
 	case <-ctx.Done():
@@ -23,16 +26,16 @@ func (s *userService) Register(ctx context.Context, req *request.RegisterUserReq
 	// Check if user already exists
 	existingUser, err := s.userRepository.FindByEmail(ctx, req.Email)
 	if err != nil {
-		return nil, fmt.Errorf("checking existing user: %w", err)
+		return nil, apperr.Internal(fmt.Errorf("checking existing user: %w", err))
 	}
 	if existingUser != nil {
-		return nil, errors.New("user already exists")
+		return nil, apperr.ErrUserAlreadyExists
 	}
 
 	// Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return nil, fmt.Errorf("hashing password: %w", err)
+		return nil, apperr.Internal(fmt.Errorf("hashing password: %w", err))
 	}
 
 	// Create user entity
@@ -43,17 +46,40 @@ func (s *userService) Register(ctx context.Context, req *request.RegisterUserReq
 		Name:     req.Name,
 	}
 
-	// Save to repository
-	_, err = s.userRepository.Create(ctx, userEntity)
+	user := response.GetUser{
+		ID:    userEntity.ID,
+		Email: userEntity.Email,
+		Name:  userEntity.Name,
+	}
+
+	// The account row and its first refresh token are written together.
+	// Without the transaction, a failure while storing the token left an
+	// account that exists but has no session, whose email is already taken by
+	// the unique index, so the owner could neither sign in nor register again.
+	var accessToken, refreshToken string
+	err = s.txManager.WithinTx(ctx, func(ctx context.Context) error {
+		if _, createErr := s.userRepository.Create(ctx, userEntity); createErr != nil {
+			// The FindByEmail check above cannot see a soft-deleted row, so a
+			// deleted account's address still occupies the unique index and
+			// only the insert discovers it. That is a conflict, not a server
+			// fault, and it is reachable as soon as accounts can be deleted.
+			if errors.Is(createErr, gorm.ErrDuplicatedKey) {
+				return apperr.ErrUserAlreadyExists
+			}
+			return apperr.Internal(fmt.Errorf("creating user: %w", createErr))
+		}
+
+		var issueErr error
+		accessToken, refreshToken, issueErr = s.issueTokens(ctx, user)
+		return issueErr
+	})
 	if err != nil {
-		return nil, fmt.Errorf("creating user: %w", err)
+		return nil, err
 	}
 
 	return &response.RegisterResponse{
-		User: response.GetUser{
-			ID:    userEntity.ID,
-			Email: userEntity.Email,
-			Name:  userEntity.Name,
-		},
+		User:         user,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
 	}, nil
 }

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/mock"
+	"go.uber.org/mock/gomock"
 )
 
 func TestGetCounter(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
 		mockReturn    int
@@ -74,6 +76,8 @@ func TestGetCounter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
@@ -108,6 +112,8 @@ func TestGetCounter(t *testing.T) {
 }
 
 func TestGetCounterWithContext(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
 		contextSetup  func() context.Context
@@ -152,6 +158,8 @@ func TestGetCounterWithContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 

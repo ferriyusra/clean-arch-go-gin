@@ -3,8 +3,10 @@ package user
 import (
 	"context"
 
-	"github.com/google/uuid"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/google/uuid"
+
+	"github.com/ferriyusra/clean-arch-go-gin/internal/repository/dbtx"
 )
 
 // Update updates a user in GORM
@@ -15,7 +17,7 @@ func (r *GORMUserRepository) Update(ctx context.Context, id uuid.UUID, user enti
 	default:
 	}
 
-	if err := r.db.WithContext(ctx).
+	if err := dbtx.Conn(ctx, r.db).
 		Model(&UserModel{}).Where("id = ?", id).
 		Updates(&user).
 		Error; err != nil {

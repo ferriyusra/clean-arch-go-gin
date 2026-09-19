@@ -52,15 +52,23 @@ All API responses use a standardized envelope:
 // Validation error
 { "success": false, "message": "Validation failed", "errors": { "field": "message" } }
 
-// Paginated (future)
-{ "success": true, "message": "...", "data": [...], "meta": { "page": 1, "limit": 10, "total": 42 } }
+// Paginated
+{ "success": true, "message": "...", "data": [...], "meta": { "page": 1, "limit": 20, "total": 42 } }
 ```
+
+Error responses also carry `requestId`, and `traceId` when the request was part
+of a trace, so a user can quote an identifier that leads straight to the
+server-side log line and span.
 
 ## API Endpoints
 
+Every endpoint below lives under `/api/v1`. Only the health probes
+(`/api/health`, `/api/health/live`, `/api/health/ready`) are unversioned, because
+they are a contract with the orchestrator rather than with an API client.
+
 ### Public Endpoints
 
-#### `POST /api/auth/register`
+#### `POST /api/v1/auth/register`
 
 Register a new user account.
 
@@ -110,7 +118,7 @@ Register a new user account.
 
 ---
 
-#### `POST /api/auth/login`
+#### `POST /api/v1/auth/login`
 
 Authenticate an existing user.
 
@@ -147,7 +155,7 @@ Authenticate an existing user.
 
 ---
 
-#### `POST /api/auth/refresh`
+#### `POST /api/v1/auth/refresh`
 
 Generate a new access token using the refresh token.
 
@@ -164,6 +172,12 @@ No body required. Refresh token is sent via cookie.
 
 **Cookies Set:**
 - `access_token` (JWT, 15 minutes, replaces old)
+- `refresh_token` (JWT, 168 hours, replaces old)
+
+Refresh rotates the *pair*, not just the access token: the presented refresh
+token is deleted and both cookies are replaced. A refresh token that verifies
+but has no matching row is treated as a replay and revokes every session for
+that user.
 
 **Error Response (401):**
 ```json
@@ -172,7 +186,7 @@ No body required. Refresh token is sent via cookie.
 
 ---
 
-#### `GET /api/csrf`
+#### `GET /api/v1/csrf`
 
 Get a CSRF token for state-changing operations.
 
@@ -185,10 +199,14 @@ No parameters required.
   "success": true,
   "message": "CSRF token generated",
   "data": {
-    "token": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+    "token": "3f1a...c7d9.00000000663f1a80.b81e...4af2"
   }
 }
 ```
+
+The real token is three hex segments separated by dots — a 32-byte nonce, the
+8-byte issue time, and the 32-byte HMAC over both — so roughly 146 characters.
+Treat it as opaque: send it back verbatim in `X-CSRF-Token`.
 
 ---
 
@@ -196,7 +214,7 @@ No parameters required.
 
 All protected endpoints require a valid `access_token` cookie.
 
-#### `GET /api/auth/me`
+#### `GET /api/v1/auth/me`
 
 Get the current authenticated user's information.
 
@@ -223,7 +241,7 @@ Get the current authenticated user's information.
 
 ---
 
-#### `POST /api/auth/logout`
+#### `POST /api/v1/auth/logout`
 
 Clear authentication cookies and logout the user.
 
@@ -241,6 +259,138 @@ Clear authentication cookies and logout the user.
 **Cookies Cleared:**
 - `access_token` (MaxAge: -1)
 - `refresh_token` (MaxAge: -1)
+
+---
+
+#### `GET /api/v1/auth/sessions`
+
+List the caller's active sessions, newest first. A "session" here is a live
+refresh token: that row is the only server-side record of a signed-in device.
+Expired rows are excluded, so what comes back is what can still authenticate.
+
+No CSRF token is required — this is a read, and there is no action for a
+third-party page to perform as the user.
+
+**Query Parameters:**
+
+| Name | Default | Rules |
+|---|---|---|
+| `page` | `1` | whole number, 1 or greater |
+| `limit` | `20` | whole number, 1 to 100 |
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Sessions retrieved",
+  "data": [
+    {
+      "id": "8f14e45f-ceea-467a-9f2a-1d3f4a5b6c7d",
+      "current": true,
+      "createdAt": "2024-05-01T09:12:44Z",
+      "expiresAt": "2024-05-08T09:12:44Z"
+    }
+  ],
+  "meta": { "page": 1, "limit": 20, "total": 3 }
+}
+```
+
+`current` marks the session the calling request is authenticated by, which is
+what lets a "sign out my other devices" screen avoid signing the user out of the
+device they are looking at. It is decided by hashing the refresh cookie and
+comparing digests; a request that carries no refresh cookie is still valid and
+simply marks nothing as current.
+
+Nothing that identifies a token crosses this boundary — there is no token field
+and no truncated digest, because the stored digest is the only thing between a
+leaked database row and a replayable credential. A handler test fails if a digest
+ever appears in this response.
+
+**Error Responses:**
+- `400 Bad Request` — `?limit=500` or `?page=abc`, with a field-level `errors` map
+- `401 Unauthorized` — missing or expired access token
+
+---
+
+#### `PATCH /api/v1/auth/password`
+
+Change the password. Requires the `access_token` cookie **and** the
+`X-CSRF-Token` header.
+
+**Request:**
+```json
+{
+  "currentPassword": "secure-password",
+  "newPassword": "an-even-better-password"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Password changed"
+}
+```
+
+**Cookies Set:**
+- `access_token` (JWT, 15 minutes, replaces old)
+- `refresh_token` (JWT, 168 hours, replaces old)
+
+Changing a password revokes **every** session for the account, including the one
+that made the request — the new hash and the revocation are a single transaction,
+so a state where the password has changed but the old sessions still work cannot
+exist, not even for the moment between two statements. That is the point of the
+change: a user does it because they believe someone else has their credentials.
+A fresh pair is then minted for the acting client, which is why this endpoint
+sets cookies: the device that asked stays signed in, every other device is
+signed out.
+
+**Error Responses:**
+- `400 Bad Request` — missing field, or a new password outside 8–72 characters
+- `401 Unauthorized` — missing access token, or the wrong current password
+- `403 Forbidden` — missing or invalid `X-CSRF-Token`
+
+A wrong current password and an account that no longer exists give the *same*
+401 (`Invalid email or password`). Distinguishing them would turn a protected
+endpoint into an account-existence oracle for anyone holding a stale token, and
+the client's next move is the same either way.
+
+---
+
+#### `DELETE /api/v1/auth/me`
+
+Delete the account and every session that belongs to it. Requires the
+`access_token` cookie **and** the `X-CSRF-Token` header.
+
+**Request:**
+No body.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Account deleted"
+}
+```
+
+**Cookies Cleared:**
+- `access_token` (MaxAge: -1)
+- `refresh_token` (MaxAge: -1)
+
+The cookies are cleared only *after* the delete succeeds; clearing them first
+would sign the user out of an account that still exists if the delete failed.
+
+The two deletions are one transaction, and they are not symmetrical. The user row
+is soft-deleted — it stops being visible to every query the application makes,
+the lookups behind login and refresh included, but the row survives. The refresh
+token rows are really gone, because a revoked credential that lingers is one that
+can be restored.
+
+**Error Responses:**
+- `401 Unauthorized` — missing or expired access token
+- `403 Forbidden` — missing or invalid `X-CSRF-Token`
+- `404 Not Found` — the account is already gone
 
 ---
 
@@ -312,20 +462,35 @@ Set-Cookie: refresh_token=eyJ...; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Ag
 
 ## CSRF Protection
 
+### Token Format
+
+The token is stateless and self-verifying:
+
+```
+hex(nonce) "." hex(issuedAt) "." hex(hmac-sha256(nonce + issuedAt))
+```
+
+Validation recomputes the MAC over the first two segments and compares. Because
+the issue time is inside the signed material, it cannot be edited to extend a
+captured token, and it is only read *after* the MAC verifies. Nothing is stored
+server-side, which is why the token has to expire on its own: `CSRF_TOKEN_TTL`
+(default 12h) is the only thing that limits a leaked one, since a stateless
+token cannot be revoked.
+
 ### Strategy
 
 **SameSite=Lax** covers most cases. For additional protection on sensitive operations:
 
 1. **Frontend requests CSRF token:**
    ```typescript
-   const body = await fetch('/api/csrf', { credentials: 'include' }).then(r => r.json());
+   const body = await fetch('/api/v1/csrf', { credentials: 'include' }).then(r => r.json());
    const csrfToken = body.data.token;
    ```
 
 2. **Frontend sends token in header:**
    ```typescript
-   fetch('/api/users/update', {
-     method: 'POST',
+   fetch('/api/v1/auth/password', {
+     method: 'PATCH',
      credentials: 'include',
      headers: {
        'X-CSRF-Token': csrfToken
@@ -336,15 +501,16 @@ Set-Cookie: refresh_token=eyJ...; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Ag
 
 3. **Backend validates token:**
    - Middleware checks `X-CSRF-Token` header
-   - Validates token (currently basic validation; extend as needed)
+   - Validates the token by recomputing the HMAC (see the token format above)
 
 ### When CSRF Headers Are Required
 
-State-changing operations require `X-CSRF-Token` header:
-- `POST` requests
-- `PUT` requests
-- `PATCH` requests
-- `DELETE` requests
+CSRF is attached **per route** in `internal/api/router.go`, not globally by
+method, so the router is the only authority on which endpoints require it. As a
+rule it guards state-changing requests made with an existing session, which is
+why `POST /auth/register` and `POST /auth/login` do not carry it: neither has a
+session to ride on yet. Check the route table in `router.go` before assuming a
+new endpoint is covered — adding a POST does not add CSRF protection to it.
 
 Safe operations do NOT require CSRF tokens:
 - `GET` requests
@@ -360,10 +526,15 @@ Safe operations do NOT require CSRF tokens:
 Set these in `.env` or your deployment platform:
 
 ```bash
-# JWT Secrets (MUST change in production!)
+# Secrets (MUST change in production!)
 JWT_ACCESS_SECRET="your-access-token-secret-key-change-in-prod"
 JWT_REFRESH_SECRET="your-refresh-token-secret-key-change-in-prod"
+CSRF_SECRET="your-csrf-signing-key-change-in-prod"
 ```
+
+Outside `DEV_MODE` all three are required, each at least 32 characters, and the
+two JWT secrets must differ — `Config.Validate()` refuses to start otherwise and
+reports every problem at once.
 
 ### Recommended Environment Variables
 
@@ -392,6 +563,7 @@ JWT_REFRESH_SECRET="dev-refresh-secret"
 
 JWT_ACCESS_SECRET="$(openssl rand -base64 32)"
 JWT_REFRESH_SECRET="$(openssl rand -base64 32)"
+CSRF_SECRET="$(openssl rand -base64 32)"
 ```
 
 For production with HTTPS, set `DEV_MODE=false` (or omit it). The `Secure` cookie flag is automatically derived from `DEV_MODE`:
@@ -410,7 +582,7 @@ Frontend uses standard `fetch` API with `credentials: 'include'` to send cookies
 
 ```typescript
 async function register(email: string, password: string, name: string) {
-  const response = await fetch('/api/auth/register', {
+  const response = await fetch('/api/v1/auth/register', {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -431,7 +603,7 @@ async function register(email: string, password: string, name: string) {
 
 ```typescript
 async function login(email: string, password: string) {
-  const response = await fetch('/api/auth/login', {
+  const response = await fetch('/api/v1/auth/login', {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -452,7 +624,7 @@ async function login(email: string, password: string) {
 
 ```typescript
 async function getCurrentUser() {
-  const response = await fetch('/api/auth/me', {
+  const response = await fetch('/api/v1/auth/me', {
     credentials: 'include'
   });
 
@@ -472,7 +644,7 @@ async function getCurrentUser() {
 
 ```typescript
 async function refreshToken() {
-  const response = await fetch('/api/auth/refresh', {
+  const response = await fetch('/api/v1/auth/refresh', {
     method: 'POST',
     credentials: 'include'
   });
@@ -490,7 +662,7 @@ async function refreshToken() {
 
 ```typescript
 async function logout() {
-  await fetch('/api/auth/logout', {
+  await fetch('/api/v1/auth/logout', {
     method: 'POST',
     credentials: 'include'
   });
@@ -505,7 +677,7 @@ async function logout() {
 ```typescript
 async function makeStateChangingRequest(method: 'POST' | 'PUT' | 'DELETE', url: string, data?: any) {
   // Get CSRF token
-  const csrfResponse = await fetch('/api/csrf', { credentials: 'include' });
+  const csrfResponse = await fetch('/api/v1/csrf', { credentials: 'include' });
   const csrfBody = await csrfResponse.json();
   const csrfToken = csrfBody.data.token;
 
@@ -552,24 +724,43 @@ The auth flow works exactly the same as production:
 ### Testing with cURL
 
 ```bash
-# Register
-curl -X POST http://localhost:8080/api/auth/register \
+# Register (the password must be at least 8 characters)
+curl -X POST http://localhost:8080/api/v1/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"test123","name":"Test User"}' \
+  -d '{"email":"test@example.com","password":"test-password","name":"Test User"}' \
   -c cookies.txt
 
 # Login
-curl -X POST http://localhost:8080/api/auth/login \
+curl -X POST http://localhost:8080/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"test123"}' \
+  -d '{"email":"test@example.com","password":"test-password"}' \
   -c cookies.txt
 
 # Get current user (using saved cookies)
-curl -X GET http://localhost:8080/api/auth/me \
+curl -X GET http://localhost:8080/api/v1/auth/me \
   -b cookies.txt
 
+# List active sessions (a read: no CSRF token needed)
+curl -X GET 'http://localhost:8080/api/v1/auth/sessions?page=1&limit=20' \
+  -b cookies.txt
+
+# A CSRF token is needed for anything that changes state
+CSRF=$(curl -s http://localhost:8080/api/v1/csrf | jq -r .data.token)
+
+# Change the password (signs every other device out, keeps this one)
+curl -X PATCH http://localhost:8080/api/v1/auth/password \
+  -H "Content-Type: application/json" -H "X-CSRF-Token: $CSRF" \
+  -d '{"currentPassword":"test-password","newPassword":"test-password-2"}' \
+  -b cookies.txt -c cookies.txt
+
 # Logout
-curl -X POST http://localhost:8080/api/auth/logout \
+curl -X POST http://localhost:8080/api/v1/auth/logout \
+  -H "X-CSRF-Token: $CSRF" \
+  -b cookies.txt
+
+# Delete the account
+curl -X DELETE http://localhost:8080/api/v1/auth/me \
+  -H "X-CSRF-Token: $CSRF" \
   -b cookies.txt
 ```
 
@@ -607,7 +798,9 @@ curl -X POST http://localhost:8080/api/auth/logout \
 - [ ] **Change JWT secrets** — Generate new values with `openssl rand -base64 32`
 - [ ] **Enable HTTPS** — Set `Secure: true` on cookies
 - [ ] **Set strong secrets** — At least 32 bytes of randomness
-- [ ] **Enable rate limiting** — On `/api/auth/login` and `/api/auth/register`
+- [ ] **Check the rate limits** — on by default, with a tighter budget on the
+      credential endpoints; tune `AUTH_RATE_LIMIT_RPS` / `AUTH_RATE_LIMIT_BURST`
+      rather than turning them off
 - [ ] **Monitor failed logins** — Detect brute force attempts
 - [ ] **Use HTTPS in Vite** — For prod-like testing
 - [ ] **Configure CORS** — If frontend is detached
@@ -624,7 +817,7 @@ No changes to auth code needed. The frontend can be deployed to any host.
 
 ### Step 2: Configure CORS
 
-CORS is already configured in `cmd/server/main.go` via `gin-contrib/cors`. Update the allowed origins:
+CORS is configured in `internal/di/container.go` (in `newRouter`) via `gin-contrib/cors`. Update the allowed origins:
 
 ```go
 import "github.com/gin-contrib/cors"
@@ -642,7 +835,7 @@ r.Use(cors.New(cors.Config{
 ```typescript
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
 
-fetch(`${API_BASE_URL}/api/auth/login`, { ... })
+fetch(`${API_BASE_URL}/api/v1/auth/login`, { ... })
 ```
 
 **That's it.** No auth logic changes needed. The API works the same way.
@@ -653,42 +846,86 @@ fetch(`${API_BASE_URL}/api/auth/login`, { ... })
 
 ### Refresh Token Revocation
 
-Refresh tokens are persisted in the database via `RefreshTokenRepository`. On login/register, tokens are stored with an expiry. On logout, all refresh tokens for the user are revoked. On refresh, the token is validated against the database (checked for existence, revocation status, and expiry) before issuing a new access token.
+Refresh tokens are persisted via `RefreshTokenRepository`, but only as a
+SHA-256 digest: the token itself is never written, so a leaked database dump
+yields nothing that can be replayed. Rows are hard-deleted rather than soft
+deleted, because a revoked credential that lingers in the table is one that can
+be restored, and a soft-deleted row would also keep its slot in the unique
+index on the digest.
+
+On login and register a digest is stored with an expiry. On logout every digest
+for the user is deleted.
+
+**Refresh rotates the pair.** Each refresh deletes the presented token and
+issues a new access *and* refresh token, so a stolen refresh token is usable
+for one request rather than for its full seven days. The old row is removed
+before the new one is written: a crash in between costs the user a re-login
+instead of leaving two live tokens for one session.
+
+**Reuse is treated as theft.** A token that verifies as a JWT but has no row
+was either revoked by a logout or already rotated away. Those are
+indistinguishable from the server side, and the second is a replay, so every
+session for that user is revoked. The false positive is a client that fires two
+refreshes with the same token and has to sign in again; the false negative
+would be an attacker holding a stolen session indefinitely.
+
+Expired rows are swept on `REFRESH_TOKEN_PURGE_INTERVAL` (default hourly, `0`
+disables it). Nothing ever reads them again, so without the sweep the table
+only grows.
 
 ### Rate Limiting
 
-Add to login/register endpoints:
+Already implemented, in two layers. `middleware.RateLimit` with a per-IP token
+bucket runs on the whole router (`RATE_LIMIT_RPS` / `RATE_LIMIT_BURST`), and the
+credential endpoints — register, login, refresh — carry a **second, much
+tighter** limiter of their own (`AUTH_RATE_LIMIT_RPS` / `AUTH_RATE_LIMIT_BURST`,
+default 0.2 rps with a burst of 5), built in `di.authRateLimiter` and attached
+per route in `router.go`.
 
-```go
-// Use a rate limiting middleware such as github.com/ulule/limiter
-// or implement custom middleware with gin.HandlerFunc
-```
+The split is the point: a global limit generous enough for normal browsing is
+generous enough to guess passwords. `RATE_LIMIT_ENABLED=false` turns both off,
+and the auth limiter then becomes a pass-through rather than a second policy
+that quietly stays on.
+
+A refused request is a `429` with the standard envelope — not a `403`, which
+would tell a well-behaved client to stop retrying something that is only
+temporarily refused.
 
 ### Multi-Device Sessions
 
 Track active sessions per user:
 
+Already implemented, without a separate entity: a `RefreshTokenEntity` row *is* a
+session, so `GET /api/v1/auth/sessions` lists them and the refresh-token digest
+identifies the caller's own.
+
 ```go
-type SessionEntity struct {
+type RefreshTokenEntity struct {
   ID        uuid.UUID
   UserID    uuid.UUID
-  Token     string
-  Device    string
+  TokenHash string     // SHA-256 digest; the token itself is never stored
   ExpiresAt time.Time
+  CreatedAt time.Time
+  UpdatedAt time.Time
 }
 ```
+
+What is still missing is per-session revocation (`DELETE .../sessions/:id`) and a
+device label. A label would mean storing a parsed `User-Agent` against each row,
+which is useful for the "is this you?" screen and worth doing deliberately rather
+than by accident.
 
 ### Two-Factor Authentication
 
 After login succeeds, challenge the user:
-- `POST /api/auth/challenge/2fa` — Send 2FA code
-- `POST /api/auth/verify/2fa` — Verify and issue tokens
+- `POST /api/v1/auth/challenge/2fa` — Send 2FA code
+- `POST /api/v1/auth/verify/2fa` — Verify and issue tokens
 
 ### OAuth/Social Login
 
 Add social auth providers:
-- `POST /api/auth/github` — Redirect to GitHub OAuth
-- `POST /api/auth/callback` — Handle OAuth callback
+- `POST /api/v1/auth/github` — Redirect to GitHub OAuth
+- `POST /api/v1/auth/callback` — Handle OAuth callback
 
 All while keeping the same HTTP-only cookie response format.
 
@@ -702,7 +939,7 @@ All while keeping the same HTTP-only cookie response format.
 
 **Solution:** Ensure `credentials: 'include'` in fetch calls:
 ```typescript
-fetch('/api/auth/me', {
+fetch('/api/v1/auth/me', {
   credentials: 'include'  // This is required
 })
 ```
@@ -730,7 +967,7 @@ fetch('/api/auth/me', {
 **Problem:** Missing or invalid `X-CSRF-Token` header.
 
 **Solutions:**
-- Fetch CSRF token first: `GET /api/csrf`
+- Fetch CSRF token first: `GET /api/v1/csrf`
 - Send token in header: `'X-CSRF-Token': token`
 - Ensure header name matches exactly (case-sensitive)
 

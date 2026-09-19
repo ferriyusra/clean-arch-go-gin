@@ -8,6 +8,8 @@ import (
 )
 
 func TestNewTokenService(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		config TokenConfig
@@ -34,6 +36,8 @@ func TestNewTokenService(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			service := NewTokenService(tt.config)
 
 			if service == nil {
@@ -49,6 +53,8 @@ func TestNewTokenService(t *testing.T) {
 }
 
 func TestTokenClaimsStructure(t *testing.T) {
+	t.Parallel()
+
 	testUserID := uuid.New()
 	claims := TokenClaims{
 		UserID: testUserID,
@@ -66,3 +72,20 @@ func TestTokenClaimsStructure(t *testing.T) {
 		t.Errorf("expected Name Test User, got %s", claims.Name)
 	}
 }
+
+// benchTokenConfig mirrors the production TTLs so the benchmarks below measure
+// the work a real request does, not a toy configuration.
+func benchTokenConfig() TokenConfig {
+	return TokenConfig{
+		AccessTokenSecret:  "bench-access-secret-at-least-32-characters",
+		AccessTokenExpiry:  15 * time.Minute,
+		RefreshTokenSecret: "bench-refresh-secret-at-least-32-characters",
+		RefreshTokenExpiry: 7 * 24 * time.Hour,
+	}
+}
+
+// Sinks for the benchmark results, so the compiler cannot delete the work.
+var (
+	benchToken  string
+	benchClaims *TokenClaims
+)

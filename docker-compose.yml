@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # The app waits for this before starting, so a cold `compose up` does not
+      # race the database's first-boot initialisation.
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      args:
+        VERSION: compose
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8080"
+      DATABASE_TYPE: postgres
+      DATABASE_DSN: "host=postgres user=app password=app dbname=app port=5432 sslmode=disable"
+      # Throwaway values: 32+ chars so Config.Validate accepts them. Replace
+      # them with real secrets before deploying anywhere.
+      JWT_ACCESS_SECRET: "compose-access-secret-change-me-0001"
+      JWT_REFRESH_SECRET: "compose-refresh-secret-change-me-002"
+      CSRF_SECRET: "compose-csrf-secret-change-me-000003"
+      ALLOWED_ORIGINS: "http://localhost:5173"
+      LOG_FORMAT: json
+      LOG_LEVEL: info
+      # Metrics on the admin listener. ADMIN_HOST is 0.0.0.0 here so the port
+      # can be published out of the container; pprof stays off, which is what
+      # lets that non-loopback bind pass validation.
+      METRICS_ENABLED: "true"
+      ADMIN_HOST: "0.0.0.0"
+      ADMIN_PORT: "9090"
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+
+  # Local trace viewer. Start it with: docker compose --profile tracing up
+  # Then open http://localhost:16686 and set OTEL_ENABLED=true on the app.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    profiles: [tracing]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+
+volumes:
+  postgres-data:

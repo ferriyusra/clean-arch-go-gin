@@ -1,0 +1,41 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint      # catches err == ErrFoo instead of errors.Is
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - revive
+    - unconvert
+    - unparam
+    - wastedassign
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true   # comments are enforced by review, not by the linter
+    gosec:
+      excludes:
+        - G104           # duplicate of errcheck
+
+  exclusions:
+    rules:
+      # Generated mocks are not written by hand and should not be judged as if
+      # they were.
+      - path: internal/(repository|service)/mock/
+        linters: [revive, gocritic, unparam, errcheck, staticcheck]
+      # Tests may ignore errors from helpers and use weak randomness.
+      - path: _test\.go
+        linters: [gosec, errcheck, unparam]
+
+formatters:
+  enable:
+    - gofmt

@@ -8,6 +8,8 @@ import (
 )
 
 func TestValidateRefreshToken(t *testing.T) {
+	t.Parallel()
+
 	testUserID := uuid.New()
 	config := TokenConfig{
 		AccessTokenSecret:  "test-access-secret",
@@ -72,6 +74,8 @@ func TestValidateRefreshToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			service := NewTokenService(config)
 			tokenString := tt.tokenFunc(service)
 
@@ -102,6 +106,8 @@ func TestValidateRefreshToken(t *testing.T) {
 }
 
 func TestValidateRefreshTokenExpired(t *testing.T) {
+	t.Parallel()
+
 	testUserID := uuid.New()
 	config := TokenConfig{
 		AccessTokenSecret:  "test-access-secret",
@@ -126,9 +132,9 @@ func TestValidateRefreshTokenExpired(t *testing.T) {
 	}
 }
 
-
-
 func TestValidateRefreshTokenClaimsIntegrity(t *testing.T) {
+	t.Parallel()
+
 	testUserID := uuid.New()
 
 	config := TokenConfig{
@@ -163,6 +169,8 @@ func TestValidateRefreshTokenClaimsIntegrity(t *testing.T) {
 }
 
 func TestValidateRefreshTokenAccessTokenMismatch(t *testing.T) {
+	t.Parallel()
+
 	testUserID := uuid.New()
 	config := TokenConfig{
 		AccessTokenSecret:  "test-access-secret",

@@ -1,19 +1,40 @@
 package response
 
-// APIResponse is the standardized envelope for all API responses
+// APIResponse is the standardized envelope for all API responses.
+//
+// Field names are camelCase, which is the convention for the whole API: a JSON
+// key is a single lowercase word or lowerCamelCase, never snake_case. There is
+// a test in this package that enforces it across every response type.
 type APIResponse struct {
 	Success bool              `json:"success"`
 	Message string            `json:"message"`
 	Data    interface{}       `json:"data,omitempty"`
 	Meta    *Meta             `json:"meta,omitempty"`
 	Errors  map[string]string `json:"errors,omitempty"`
+
+	// RequestID and TraceID are attached to error responses so a user can quote
+	// an identifier back that leads straight to the server-side logs and trace.
+	// They are omitted from successful responses, where the X-Request-ID header
+	// already carries the same value and the body should stay lean.
+	RequestID string `json:"requestId,omitempty"`
+	TraceID   string `json:"traceId,omitempty"`
 }
 
-// Meta holds pagination metadata
+// Meta holds pagination metadata.
+//
+// Total is int64 because that is what a SQL COUNT returns and what every
+// repository counting method hands back. Narrowing it to int at the boundary
+// would be a conversion with nothing to gain: the JSON key and its encoding are
+// identical either way, and on a 32-bit build the narrowing could overflow.
 type Meta struct {
-	Page  int `json:"page"`
-	Limit int `json:"limit"`
-	Total int `json:"total"`
+	Page  int   `json:"page"`
+	Limit int   `json:"limit"`
+	Total int64 `json:"total"`
+}
+
+// NewMeta builds the pagination metadata for a page of results.
+func NewMeta(page, limit int, total int64) *Meta {
+	return &Meta{Page: page, Limit: limit, Total: total}
 }
 
 // OK returns a success response with data
@@ -50,4 +71,12 @@ func ValidationErr(message string, errors map[string]string) APIResponse {
 		Message: message,
 		Errors:  errors,
 	}
+}
+
+// WithCorrelation returns a copy tagged with the identifiers that tie this
+// response to its log lines and its trace. Empty values are left off.
+func (r APIResponse) WithCorrelation(requestID, traceID string) APIResponse {
+	r.RequestID = requestID
+	r.TraceID = traceID
+	return r
 }

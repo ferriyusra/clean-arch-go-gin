@@ -1,0 +1,1954 @@
+openapi: 3.1.0
+
+info:
+  title: clean-arch-go-gin API
+  version: 1.0.0
+  summary: JSON API for the clean-architecture Go + Gin service.
+  description: |
+    Every response — success or failure, including the 404 and 405 produced by
+    unmatched routes — is the same JSON envelope (`success`, `message`, and an
+    optional `data`). Clients can therefore parse one shape and never have to
+    branch on whether the body is an error.
+
+    ## Versioning, and why health is not versioned
+
+    The API lives under **`/api/v1`**. There are deliberately no unversioned
+    `/api/...` aliases beside it: the unversioned surface returns `404`.
+    Running two live surfaces is a tax paid on every route forever — two paths
+    to test, two to document, and a slow drift as someone fixes one and forgets
+    the other — and this service has no external consumers yet, so the whole
+    cost of the move is one line in a client's base URL. A compatibility layer
+    is worth adding the day there is something to be compatible with.
+
+    The health probes are the exception and stay **unversioned**, at
+    `/api/health`, `/api/health/live` and `/api/health/ready`. This asymmetry is
+    intentional, not an oversight. A health endpoint is a contract with the
+    orchestrator, not with an API client: it is wired into liveness and
+    readiness probes, load balancer checks and uptime monitors that all live
+    outside this repository. Versioning it would mean that shipping `/api/v2`
+    requires editing every one of those in lockstep, or the platform starts
+    killing healthy pods. The probes also have no payload to evolve — a status
+    and a dependency map — so a version would buy nothing in return.
+
+    The practical consequence for a client: `/api/v1` is the base URL for
+    everything an application calls, and the three health paths are absolute and
+    are not reached by joining that base URL with a relative path. Every path in
+    this document is written in full for exactly that reason, and the `servers`
+    entries are bare origins.
+
+    ## Authentication in one paragraph
+
+    There is **no `Authorization: Bearer` path in this API at all**. The access
+    and refresh JWTs are delivered exclusively as `HttpOnly` cookies
+    (`access_token`, `refresh_token`) that the server sets and the browser
+    replays automatically. JavaScript cannot read them, which is the point: a
+    successful XSS cannot exfiltrate a session. In practice a browser client
+    sends `credentials: 'include'` and otherwise does nothing, and a non-browser
+    client (curl, a test harness) must keep a cookie jar.
+
+    Because cookies are attached by the browser on *any* request to this origin,
+    cookies alone cannot prove the user intended the request. That is what the
+    separate CSRF token is for: fetch one from `GET /api/v1/csrf` and echo it in
+    the `X-CSRF-Token` header on the state-changing routes that require it. It is
+    required on exactly five operations today — `POST /api/v1/auth/refresh`,
+    `POST /api/v1/auth/logout`, `PATCH /api/v1/auth/password`,
+    `DELETE /api/v1/auth/me` and `POST /api/v1/counter` — and deliberately *not*
+    on register or login, which have no session for a forged request to ride on,
+    nor on the reads (`GET /api/v1/auth/me`, `GET /api/v1/auth/sessions`,
+    `GET /api/v1/counter`), which change nothing for a forged request to achieve.
+
+    ## Error correlation
+
+    Error bodies carry `requestId`, and `traceId` as well when distributed
+    tracing is enabled. Quote either back to an operator and it leads straight to
+    the server-side log line and the trace for that exact request. Successful
+    responses omit both to keep bodies lean — the `X-Request-ID` response header
+    carries the same value on every response either way.
+
+    ## Rate limiting
+
+    A global per-IP token bucket guards the whole API (default 20 rps, burst 40),
+    so **every** operation here can answer `429`. Exactly three endpoints —
+    `POST /api/v1/auth/register`, `POST /api/v1/auth/login` and
+    `POST /api/v1/auth/refresh` — additionally sit behind a second, far stricter
+    bucket of their own (default 0.2 rps, burst 5). Those are the credential
+    endpoints, the ones worth guessing against. Everything else, logout and the
+    account-lifecycle operations included, is covered by the global limit only.
+
+    Throttling always answers `429`, never `403`: `403` tells a client the
+    request will never be allowed and a well-behaved one stops retrying, whereas
+    a rate limit is a temporary refusal. No `Retry-After` or `X-RateLimit-*`
+    headers are sent on any `429`.
+  contact:
+    name: clean-arch-go-gin
+    url: https://github.com/ferriyusra/clean-arch-go-gin
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: |
+      Local development server (SERVER_PORT, default 8080).
+
+      The server URL is the bare origin, with **no base path**, and every entry
+      under `paths` carries its full prefix. That is not verbosity for its own
+      sake: this service serves two prefixes that do not share a root — the
+      versioned API under `/api/v1` and the unversioned probes under
+      `/api/health` — so no single base path can describe both. A server
+      variable factored out of the paths would have to be overridden per
+      operation, which OpenAPI can express but no client generator handles
+      gracefully, and which hides the one thing a reader needs: the real URL.
+  - url: https://{host}
+    description: A deployed instance.
+    variables:
+      host:
+        default: api.example.com
+
+tags:
+  - name: Auth
+    description: |
+      Registration, login, session rotation, logout, the current-user lookup,
+      the session list and the account-lifecycle operations (password change and
+      account deletion). Tokens travel only in HttpOnly cookies; no token ever
+      appears in a response body, and neither does a refresh token's digest.
+  - name: CSRF
+    description: Issues the stateless HMAC token the guarded write routes require.
+  - name: Counter
+    description: A demo resource behind authentication.
+  - name: Message
+    description: A public demo resource.
+  - name: Health
+    description: |
+      Liveness and readiness probes. They are separate endpoints on purpose: an
+      orchestrator has to be able to tell "restart this process" apart from
+      "stop routing traffic here for a moment".
+
+      These are the only routes **not** under `/api/v1`. They live at
+      `/api/health*` and stay there across API versions, because they are a
+      contract with the orchestrator rather than with an API client — see the
+      versioning note in the top-level description.
+
+security: []
+
+paths:
+  /api/v1/message:
+    get:
+      operationId: getMessage
+      tags: [Message]
+      summary: Get the public message
+      description: |
+        Public: no cookie, no CSRF token. Returns the single seeded message row.
+      security: []
+      responses:
+        "200":
+          description: The message was read.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageEnvelope"
+              example:
+                success: true
+                message: Message retrieved
+                data:
+                  content: Welcome to Clean Go Vite React!
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/csrf:
+    get:
+      operationId: getCsrfToken
+      tags: [CSRF]
+      summary: Issue a CSRF token
+      description: |
+        Returns a freshly minted CSRF token. Call this before any operation that
+        declares the `csrfToken` security scheme and send the value back in the
+        `X-CSRF-Token` header.
+
+        The token is **stateless**: nothing is stored server-side, and validity
+        is decided by recomputing an HMAC-SHA256 over the token's own nonce and
+        issue time. The consequence a client author has to plan for is that such
+        a token **cannot be revoked**, so instead it simply stops being accepted
+        `CSRF_TOKEN_TTL` after issue (default 12 hours). A long-lived
+        single-page app should therefore re-fetch on `403` rather than cache one
+        token for the life of the tab. The issue time is part of the signed
+        material, so it cannot be edited to extend a captured token, and it is
+        only read after the MAC verifies.
+
+        This endpoint needs no session, which is what makes it usable before
+        `POST /api/v1/auth/refresh`.
+      security: []
+      responses:
+        "200":
+          description: A token was generated.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CSRFTokenEnvelope"
+              example:
+                success: true
+                message: CSRF token generated
+                data:
+                  token: 3f9a1c4e7b2d8065a1f3c9e27d4b6a08e5c1f7239db04a6c8e2f5107b3d9a4c6.0000000068cd4f80.7c4e91a2f0b83d65ce17a94f2b60d8371e5c9042a7f3b16d8e05c2947af31b6e
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/auth/register:
+    post:
+      operationId: register
+      tags: [Auth]
+      summary: Create an account and start a session
+      description: |
+        Creates the account **and** mints its first token pair in one
+        transaction, so a successful `201` always leaves the caller signed in —
+        there is no separate "now log in" step. Writing the account without its
+        first session would strand the owner: the email is taken by the unique
+        index, so they could neither sign in nor register again.
+
+        No CSRF token is required: there is no existing session for a forged
+        cross-site request to ride on.
+
+        **A deleted account's address is still taken.** `409` covers both a live
+        account and a deleted one: `DELETE /api/v1/auth/me` soft-deletes the user
+        row, which keeps its slot in the unique index on `email`, so the address
+        can never be registered again — by its original owner or by anyone else.
+        See `DELETE /api/v1/auth/me`.
+
+        **Rate limit:** this endpoint sits behind a second, much tighter budget
+        than the rest of the API (default 0.2 requests/second with a burst of 5
+        per client IP, against the global 20/second). An allowance generous
+        enough for normal browsing is generous enough to guess passwords, so the
+        endpoints worth guessing against get their own. Expect `429` far sooner
+        here than anywhere else.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+            example:
+              email: ada.lovelace@example.com
+              password: correct-horse-battery-staple
+              name: Ada Lovelace
+      responses:
+        "201":
+          description: |
+            The account was created and a session started. Two `Set-Cookie`
+            headers are sent, one per token. The body deliberately contains **no
+            tokens** — they exist only in the cookies.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/SetAuthCookies"
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserWrapperEnvelope"
+              example:
+                success: true
+                message: Registration successful
+                data:
+                  user:
+                    id: 9f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f
+                    email: ada.lovelace@example.com
+                    name: Ada Lovelace
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "409":
+          description: |
+            The email address is already taken. Two different situations produce
+            the identical body, and a client does not need to tell them apart —
+            in both, this address is unusable and the user must choose another:
+
+            - **A live account already uses it.** The duplicate check finds the
+              row before anything is written.
+            - **A deleted account still holds it.** The user row is
+              soft-deleted, so the duplicate check — which runs under GORM's
+              default scope — cannot see it, and registration proceeds until the
+              unique index on `email` refuses the insert. GORM is configured
+              with `TranslateError`, so that refusal arrives as a recognisable
+              duplicate-key error rather than an opaque driver failure, and the
+              service maps it to the same conflict sentinel as the case above.
+
+            The second case is permanent. There is no "reclaim my old address"
+            path in this API.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                message: Email is already registered
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+        "429":
+          $ref: "#/components/responses/TooManyRequestsAuth"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Sign in
+      description: |
+        Verifies the credentials and issues a new token pair as cookies.
+
+        A wrong password and an unknown email return the identical `401` body
+        *and* take the same amount of time — the server hashes against a dummy
+        digest when the account does not exist — so neither the message nor the
+        latency reveals which addresses are registered.
+
+        The request schema validates only presence and an upper bound here, not
+        the password rules that `register` enforces: rejecting a too-short
+        password at login would tell an attacker which stored passwords cannot
+        exist.
+
+        No CSRF token is required, for the same reason as register.
+
+        **Rate limit:** as with register, this endpoint has its own much stricter
+        per-IP budget (default 0.2 rps, burst 5), because it is the endpoint
+        worth guessing passwords against.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+            example:
+              email: ada.lovelace@example.com
+              password: correct-horse-battery-staple
+      responses:
+        "200":
+          description: |
+            Signed in. Both auth cookies are set. Sessions are independent: any
+            token pair issued to another device stays valid.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/SetAuthCookies"
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserWrapperEnvelope"
+              example:
+                success: true
+                message: Login successful
+                data:
+                  user:
+                    id: 9f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f
+                    email: ada.lovelace@example.com
+                    name: Ada Lovelace
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          description: |
+            The credentials did not match. The message is intentionally identical
+            for an unknown email and a wrong password.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                message: Invalid email or password
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+        "429":
+          $ref: "#/components/responses/TooManyRequestsAuth"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/auth/refresh:
+    post:
+      operationId: refresh
+      tags: [Auth]
+      summary: Rotate the session token pair
+      description: |
+        Exchanges the `refresh_token` cookie for a **brand new pair**. There is
+        no request body: the token is read from the cookie the browser sends
+        automatically.
+
+        **This rotates both tokens.** The presented refresh token is deleted
+        server-side and a new `access_token` *and* a new `refresh_token` are
+        issued, so the client holds a different refresh token after this call
+        than before it. That bounds a stolen refresh token's usefulness to a
+        single request instead of its full lifetime. The delete and the re-issue
+        happen inside one transaction, so a crash mid-way costs the user a
+        re-login rather than leaving two live tokens for one session.
+
+        **Replay is treated as theft.** A refresh token that verifies as a JWT
+        but has no matching row in the database was either revoked by a logout or
+        already rotated away. Those two are indistinguishable from the server
+        side and the second is a replay, so the server revokes **every session
+        for that user** and answers `401 Refresh token has been revoked`. A
+        client must therefore never fire two refreshes with the same token
+        concurrently — the loser of the race signs the user out everywhere.
+        Serialise refreshes behind a single in-flight promise.
+
+        A CSRF token **is** required here, unlike register and login, because the
+        refresh cookie is a live credential the browser would attach to a forged
+        cross-site request.
+
+        **Rate limit:** shares the stricter credential-endpoint budget (default
+        0.2 rps, burst 5 per IP).
+      security:
+        - refreshTokenCookie: []
+          csrfToken: []
+      responses:
+        "200":
+          description: |
+            The pair was rotated. Two `Set-Cookie` headers are sent — the new
+            access token and the new refresh token. `data` is omitted: there is
+            nothing to return that is not already in the cookies.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/SetAuthCookies"
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyEnvelope"
+              example:
+                success: true
+                message: Token refreshed
+        "401":
+          description: |
+            The refresh token was missing, malformed, expired, or revoked.
+            `Refresh token has been revoked` specifically means the replay path
+            above fired and every session for the user is now gone; the only
+            recovery is a fresh login.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                missing:
+                  summary: No refresh_token cookie was sent
+                  value:
+                    success: false
+                    message: Missing refresh token
+                    requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+                invalid:
+                  summary: Signature or claims did not verify
+                  value:
+                    success: false
+                    message: Invalid refresh token
+                    requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+                expired:
+                  summary: The stored row had already passed its expiry
+                  value:
+                    success: false
+                    message: Refresh token has expired
+                    requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+                revoked:
+                  summary: Replay detected — every session for the user was revoked
+                  value:
+                    success: false
+                    message: Refresh token has been revoked
+                    requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+        "403":
+          $ref: "#/components/responses/CSRFRejected"
+        "429":
+          $ref: "#/components/responses/TooManyRequestsAuth"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      tags: [Auth]
+      summary: End the session
+      description: |
+        Deletes every stored refresh token for the authenticated user and clears
+        both auth cookies.
+
+        **Logout always reports success.** If revoking the stored tokens fails,
+        the failure is logged but the request still returns `200` with the
+        cookies cleared: a client trying to sign out must never be left believing
+        it is still signed in. The `401` and `403` below come from middleware,
+        before the handler runs.
+
+        Note that this revokes *all* of the user's refresh tokens, not only the
+        one on this device, so signing out in one tab ends every session for that
+        account.
+
+        Requires both a valid access-token cookie and a CSRF token.
+      security:
+        - accessTokenCookie: []
+          csrfToken: []
+      responses:
+        "200":
+          description: |
+            Signed out. Two `Set-Cookie` headers expire `access_token` and
+            `refresh_token` immediately.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/ClearAuthCookies"
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyEnvelope"
+              example:
+                success: true
+                message: Logged out successfully
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CSRFRejected"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [Auth]
+      summary: Get the authenticated user
+      description: |
+        Returns the account identified by the access-token cookie.
+
+        This is how a browser client discovers whether it has a session at all:
+        it cannot read the HttpOnly cookie to check. Call this on boot and treat
+        `401` as "anonymous", not as an error worth reporting to the user.
+      security:
+        - accessTokenCookie: []
+      responses:
+        "200":
+          description: The user was found.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserEnvelope"
+              example:
+                success: true
+                message: User retrieved
+                data:
+                  id: 9f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f
+                  email: ada.lovelace@example.com
+                  name: Ada Lovelace
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+    delete:
+      operationId: deleteAccount
+      tags: [Auth]
+      summary: Delete the account
+      description: |
+        Deletes the authenticated account and every session it owns, then clears
+        both auth cookies. There is no request body and no confirmation step in
+        the API — a client that wants one has to implement it itself.
+
+        **This is not reversible from the API, and the email address is gone for
+        good.** Two different kinds of delete happen here, and the difference is
+        the whole story:
+
+        - The **user row is soft-deleted**. It carries `gorm.DeletedAt`, so it
+          stops being visible to every query the application makes — login and
+          refresh included — but the row survives in the table, and it keeps its
+          slot in the unique index on `email`.
+        - The **refresh tokens are really deleted**. `RefreshTokenEntity`
+          deliberately has no `DeletedAt`: a soft-deleted credential would still
+          occupy the unique index on its digest, and a revoked credential that
+          lingers is one that can be restored. Revocation has to be a real
+          delete.
+
+        The consequence a client author must plan for: **the email address is
+        permanently reserved and cannot be registered again — by its original
+        owner or by anyone else.** The surviving row holds the slot in the
+        unique index, so `POST /api/v1/auth/register` with that address answers
+        `409 Email is already registered` forever. Warn the user before calling
+        this, and do not offer "sign up again with the same address" as a
+        recovery path; there is none.
+
+        Both deletes are one transaction. Half of this is worse than neither
+        half: live credentials pointing at an account that is gone, or a user
+        signed out of an account that still holds their data.
+
+        The cookies are cleared only after the delete succeeds, so a failure
+        leaves the caller signed in and able to retry.
+
+        Requires a session **and** a CSRF token.
+      security:
+        - accessTokenCookie: []
+          csrfToken: []
+      responses:
+        "200":
+          description: |
+            The account and its sessions are gone. Two `Set-Cookie` headers
+            expire `access_token` and `refresh_token` immediately.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/ClearAuthCookies"
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyEnvelope"
+              example:
+                success: true
+                message: Account deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CSRFRejected"
+        "404":
+          description: |
+            The access token verified but the account behind it is already gone
+            — a token still in the wild for a row deleted by an earlier call.
+            Treat it as success: there is nothing left to delete.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                message: User not found
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/auth/sessions:
+    get:
+      operationId: listSessions
+      tags: [Auth]
+      summary: List the caller's active sessions
+      description: |
+        Returns a page of the authenticated user's **active sessions**, newest
+        first. A session here is one live refresh token: that row is the only
+        server-side record of a signed-in device, and deleting it is what
+        signing that device out means. Rows whose expiry has passed are excluded
+        — the background janitor only sweeps on an interval, so between sweeps
+        the table still holds rows that no longer authenticate anything, and
+        reporting those would show a user devices they were signed out of hours
+        ago.
+
+        **No CSRF token is required.** This is a read; the token exists to stop a
+        third-party page performing an action as the user, and there is no action
+        here to perform.
+
+        The `refresh_token` cookie, if the browser sends one, is used for exactly
+        one purpose: to set `current` on the session this request belongs to, so
+        a "sign out my other devices" screen can avoid signing the user out of
+        the device they are looking at. A request without that cookie is
+        perfectly valid — an access token alone reaches this endpoint — and
+        simply marks no session as current.
+
+        Pagination metadata comes back in the envelope's own `meta`, not inside
+        `data`, so the payload has the same `data: [...]` shape as any other
+        collection.
+      security:
+        - accessTokenCookie: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: |
+            A page of active sessions. `meta` carries the window and the total
+            across all pages; `data` may be an empty array, which for an
+            authenticated caller means every session but the access token's own
+            has expired.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionListEnvelope"
+              example:
+                success: true
+                message: Sessions retrieved
+                data:
+                  - id: 2c9d1a7b-58e4-4f30-9c61-7de0b3f42a15
+                    current: true
+                    createdAt: "2026-09-18T09:12:44Z"
+                    expiresAt: "2026-09-25T09:12:44Z"
+                  - id: 8a3f0e21-6b7c-4d59-a0e8-14b25c9f7d63
+                    current: false
+                    createdAt: "2026-09-14T21:03:07Z"
+                    expiresAt: "2026-09-21T21:03:07Z"
+                meta:
+                  page: 1
+                  limit: 20
+                  total: 2
+        "400":
+          description: |
+            A pagination parameter was out of range or not a number at all —
+            `?page=0` is *not* an error (an absent or zero page means the first
+            page), but `?page=-1`, `?limit=0` and `?limit=500` are, and so is
+            `?limit=abc`. The failed parameters are listed in `errors` under the
+            names the client sent, the same shape a rejected request body
+            produces.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                overCeiling:
+                  summary: limit exceeded the ceiling of 100
+                  value:
+                    success: false
+                    message: Validation failed
+                    errors:
+                      limit: Must be at most 100
+                    requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+                notANumber:
+                  summary: A parameter could not be parsed as an integer
+                  value:
+                    success: false
+                    message: Validation failed
+                    errors:
+                      page: Must be a positive whole number
+                      limit: Must be a whole number between 1 and 100
+                    requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/auth/password:
+    patch:
+      operationId: changePassword
+      tags: [Auth]
+      summary: Change the password and sign out every other device
+      description: |
+        Replaces the authenticated user's password, having verified the current
+        one.
+
+        **A successful change revokes every refresh token the user has, and then
+        issues a fresh pair to the client that asked.** That is the point of the
+        endpoint, not a side effect, and a client author has to design around it:
+
+        - Every *other* signed-in device loses its **refresh** token
+          immediately. The next `POST /api/v1/auth/refresh` from any of them
+          answers `401 Refresh token has been revoked`, and the only recovery is
+          a fresh login.
+        - The **calling** client stays signed in. Two `Set-Cookie` headers are
+          sent on this response, a new `access_token` and a new `refresh_token`,
+          replacing the pair that was just revoked along with the rest. A client
+          that ignores them will find its session dead at the next refresh.
+
+        ### Sign-out is not instant, and a user will assume it is
+
+        Read this before building a "change password because I think I was
+        hacked" flow. **The other devices' *access* tokens keep working for up
+        to `JWT_ACCESS_TTL` — 15 minutes by default — after the password
+        changes.** An access token is verified by its signature alone; nothing
+        in the request path looks it up in any table, so there is no record to
+        delete and no way to reject one early. Whoever holds a stolen access
+        token keeps full use of the account until that token expires on its own.
+
+        What actually happens, in order: the password changes and every refresh
+        token dies at that instant, so no attacker can extend their access past
+        the token they already hold; then, within `JWT_ACCESS_TTL`, their access
+        token expires, their refresh attempt is refused, and they are out.
+
+        A user changing their password after a suspected compromise will
+        reasonably read "signed out everywhere" as "right now". It is not. If
+        your interface says anything about other sessions ending, say *within
+        15 minutes*, not *immediately* — and if you need a genuinely instant
+        cut-off, this API does not provide one; it would require checking access
+        tokens against server-side state on every request, which this service
+        deliberately does not do.
+
+        The reasoning: a user changes a password because they believe someone
+        else has their credentials. If sessions minted before the change kept
+        working, an attacker would keep their access for the full refresh-token
+        lifetime and the change would have accomplished nothing. The update, the
+        revocation and the re-issue are one transaction, so a state where the
+        password has changed but the old sessions survive never exists.
+
+        Concurrent changes are safe rather than serialised: two clients that both
+        know the current password both succeed, last write wins, and both revoke
+        the sessions — the safe outcome either way.
+
+        Requires a session **and** a CSRF token.
+      security:
+        - accessTokenCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+            example:
+              currentPassword: correct-horse-battery-staple
+              newPassword: a-much-better-passphrase-2026
+      responses:
+        "200":
+          description: |
+            The password was changed. Every session for the account was revoked
+            and a new pair was issued to this client as two `Set-Cookie`
+            headers. `data` is omitted: there is nothing to return that is not
+            already in the cookies.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/SetAuthCookies"
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyEnvelope"
+              example:
+                success: true
+                message: Password changed
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          description: |
+            Either the session was not usable — see `Missing authentication
+            token` / `Invalid or expired token`, which come from middleware
+            before this handler runs — or `currentPassword` did not match.
+
+            The wrong-password case returns `Invalid email or password`, the same
+            message login uses, and the same message a valid token for an account
+            that no longer exists returns. Answering "no such user" there would
+            turn this protected endpoint into an account-existence oracle for
+            anyone holding a stale token, and the client's next move is identical
+            either way: sign in again.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                wrongCurrentPassword:
+                  summary: currentPassword did not match the stored hash
+                  value:
+                    success: false
+                    message: Invalid email or password
+                    requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+                noSession:
+                  summary: The access token was missing or did not verify
+                  value:
+                    success: false
+                    message: Invalid or expired token
+                    requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+        "403":
+          $ref: "#/components/responses/CSRFRejected"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/v1/counter:
+    get:
+      operationId: getCounter
+      tags: [Counter]
+      summary: Read the counter
+      description: |
+        Returns the current value of the shared counter. Requires a session; no
+        CSRF token, because reading changes nothing.
+      security:
+        - accessTokenCookie: []
+      responses:
+        "200":
+          description: The current value.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CounterEnvelope"
+              example:
+                success: true
+                message: Counter retrieved
+                data:
+                  value: 42
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+    post:
+      operationId: incrementCounter
+      tags: [Counter]
+      summary: Increment the counter
+      description: |
+        Increments the shared counter by one and returns the new value. Takes no
+        request body.
+
+        Answers `200`, not `201`: the counter is a singleton being updated, not a
+        collection gaining a member.
+
+        Requires a session **and** a CSRF token, since it changes state.
+      security:
+        - accessTokenCookie: []
+          csrfToken: []
+      responses:
+        "200":
+          description: The value after the increment.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CounterEnvelope"
+              example:
+                success: true
+                message: Counter incremented
+                data:
+                  value: 43
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CSRFRejected"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /api/health:
+    get:
+      operationId: getHealth
+      tags: [Health]
+      summary: Readiness probe (alias)
+      description: |
+        Identical to `GET /api/health/ready` — same handler, same semantics. It
+        exists because it was the original single health endpoint and existing
+        probes still point at it. New deployments should target the explicit
+        `/live` and `/ready` paths, whose names say which question they answer.
+
+        Note the path: `/api/health`, **not** `/api/v1/health`. The probes did
+        not move when the rest of the API did, and that is deliberate — the
+        reasoning is in the versioning note at the top of this document. There
+        is no versioned alias; `/api/v1/health` returns `404`.
+      security: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Ready"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/NotReady"
+
+  /api/health/live:
+    get:
+      operationId: getLiveness
+      tags: [Health]
+      summary: Liveness probe
+      description: |
+        Answers "is this process running at all?" and **touches no dependency**
+        on purpose. A database blip must not make an otherwise healthy process
+        look dead, because an orchestrator's reaction to a failed liveness probe
+        is to restart the process — turning a brief outage into a restart loop
+        that fixes nothing.
+
+        Consequently there is no failure body to document here: if the process
+        can answer, the answer is `200`. A wedged process fails this probe by not
+        answering at all.
+      security: []
+      responses:
+        "200":
+          description: The process is alive.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthEnvelope"
+              example:
+                success: true
+                message: Service is healthy
+                data:
+                  status: ok
+                  message: Service is healthy
+                  details:
+                    timestamp: "2026-09-19T10:24:31Z"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/health/ready:
+    get:
+      operationId: getReadiness
+      tags: [Health]
+      summary: Readiness probe
+      description: |
+        Answers "can this instance serve traffic right now?" by probing every
+        registered dependency — today that is a database ping. Point a load
+        balancer here: a `503` means take this instance out of rotation, not
+        restart it.
+
+        Each dependency reports individually under `data.details`, so a `503`
+        says *which* dependency is down rather than only that something is.
+      security: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Ready"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/NotReady"
+
+components:
+  securitySchemes:
+    accessTokenCookie:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: |
+        The short-lived access JWT (default TTL 15 minutes, `JWT_ACCESS_TTL`).
+
+        **A client cannot read or set this cookie.** It is written by the server
+        with `HttpOnly`, `SameSite=Lax`, `Path=/` and — outside development —
+        `Secure`, so `document.cookie` cannot see it and no code can attach it
+        manually. The browser replays it automatically; `fetch` needs
+        `credentials: 'include'` for that to happen cross-origin. There is no
+        `Authorization: Bearer` alternative anywhere in this API.
+
+        A non-browser client must use a cookie jar (`curl -c jar -b jar`).
+
+        When it expires, call `POST /api/v1/auth/refresh` rather than asking the
+        user to sign in again.
+    refreshTokenCookie:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+      description: |
+        The long-lived refresh JWT (default TTL 168 hours, `JWT_REFRESH_TTL`),
+        used only by `POST /api/v1/auth/refresh`.
+
+        Like the access cookie it is `HttpOnly` and server-set, so a client can
+        never read or forward it by hand.
+
+        It is a JWT *and* a database row — only a SHA-256 digest of it is stored,
+        never the token itself — and the row is what makes revocation possible.
+        Each refresh rotates it, so its value changes on every use.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: |
+        A stateless HMAC-SHA256 token, shaped `hex(nonce).hex(issuedAt).hex(mac)`
+        and obtained from `GET /api/v1/csrf`.
+
+        It exists because the auth cookies are attached by the browser to *any*
+        request to this origin, including one triggered by another site. A value
+        that must be read from a response body and copied into a custom header is
+        something a cross-site attacker cannot supply.
+
+        Nothing about it is stored server-side; it is validated by recomputing
+        the MAC. That makes it un-revocable, so it instead expires
+        `CSRF_TOKEN_TTL` after issue (default 12 hours) — re-fetch on `403`.
+
+        Unlike the cookies above, a client *does* send this one explicitly.
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      description: |
+        The 1-based page to return. Defaults to `1` when absent.
+
+        `?page=0` yields the first page rather than an error. Go cannot
+        distinguish a query parameter sent as `0` from one that was not sent at
+        all on an `int` field, and the alternative — pointer fields, or a
+        parallel set of "was it present" booleans — costs more at every call
+        site than the case is worth. A **negative** page is still rejected with
+        `400`, which catches the mistake that actually happens: arithmetic that
+        ran off the end of a list.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      examples:
+        firstPage:
+          summary: The default
+          value: 1
+        secondPage:
+          value: 2
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: |
+        How many items to return. Defaults to `20`, and is **capped at 100**.
+
+        The ceiling is the load-bearing rule here, not a stylistic choice.
+        Without it a client asks for `?limit=1000000` and the database does the
+        work: a full scan, a result set materialised in memory and serialised,
+        and a connection tied up for as long as that takes — a denial of service
+        that costs the caller one query string. A refused request is cheap; an
+        unbounded one is not.
+
+        Asking for more than 100 is **rejected with `400`**, not silently
+        clamped, so a client that needs more pages knows it has to ask for them
+        rather than quietly receiving a short page it might mistake for the end
+        of the collection.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+      examples:
+        default:
+          summary: The default page size
+          value: 20
+        ceiling:
+          summary: The largest page the server will return
+          value: 100
+
+  headers:
+    XRequestID:
+      description: |
+        The correlation id for this request, echoed on every response. If the
+        request carried an `X-Request-ID` of its own it is reused (so a gateway
+        can propagate its id); otherwise the W3C trace id is adopted when tracing
+        is on, and failing that a fresh UUID is generated. The same value appears
+        on every server log line for the request and in the `requestId` field of
+        an error body.
+      schema:
+        type: string
+        maxLength: 128
+        pattern: "^[A-Za-z0-9._-]+$"
+      example: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+    SetAuthCookies:
+      description: |
+        **Two** `Set-Cookie` headers are sent on this response — one for
+        `access_token` and one for `refresh_token` — not the single header this
+        schema can express. Both are `HttpOnly`, `SameSite=Lax`, `Path=/`, and
+        `Secure` unless the server runs with `DEV_MODE=true` (where there is no
+        TLS to be secure over). `Max-Age` on each matches the TTL the token was
+        signed with, so a cookie can neither outlive nor predecease its token.
+      schema:
+        type: string
+      example: access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI5ZjFjMmQzZS00YTViLTRjNmQtOGU3Zi0wYTFiMmMzZDRlNWYifQ.dQw9xw0tDLW3aM8f2Zt7kqUeRv1o5nYb3cJhP6gKsXE; Path=/; Max-Age=900; HttpOnly; Secure; SameSite=Lax
+    ClearAuthCookies:
+      description: |
+        **Two** `Set-Cookie` headers are sent, expiring `access_token` and
+        `refresh_token` immediately (empty value, `Max-Age=0`), with the same
+        `Path`, `HttpOnly`, `SameSite` and `Secure` attributes they were set
+        with — a cookie is only replaced when those match.
+      schema:
+        type: string
+      example: access_token=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax
+
+  schemas:
+    APIResponse:
+      type: object
+      title: APIResponse
+      description: |
+        The envelope every response body uses. Per-operation bodies compose this
+        with `allOf` and narrow `data`, so the envelope is defined exactly once.
+
+        `requestId` and `traceId` are absent here on purpose: they are attached
+        only to error responses (see `ErrorResponse`), because on a success the
+        `X-Request-ID` header already carries the same value and the body should
+        stay lean.
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+          description: |
+            Whether the request succeeded. It is redundant with the HTTP status
+            and exists so a client that has already parsed the body does not need
+            to reach back for the status to decide which branch it is on.
+        message:
+          type: string
+          description: |
+            A short human-readable summary. On failure this is a client-safe
+            message only; internal causes (driver errors, hostnames) are logged
+            server-side and never appear here.
+          examples: [Counter retrieved]
+        data:
+          description: |
+            The operation's payload. Omitted entirely — not `null` — when there
+            is nothing to return, as on refresh and logout.
+        meta:
+          $ref: "#/components/schemas/Meta"
+      additionalProperties: false
+
+    ErrorResponse:
+      type: object
+      title: ErrorResponse
+      description: |
+        The failure shape of the envelope. Every non-2xx response in this API
+        uses it, including the fallback `404` and `405` for unmatched routes and
+        methods, and the body written when a panic is recovered.
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+          const: false
+        message:
+          type: string
+          description: The client-safe reason the request was rejected.
+          examples: [Invalid email or password]
+        errors:
+          type: object
+          description: |
+            Field-level detail, present only on validation failures. Keys are the
+            JSON field names from the request body (not the Go field names), so a
+            client can map each message straight onto the input that produced it.
+          additionalProperties:
+            type: string
+          examples:
+            - email: Must be a valid email address
+              password: Must be at least 8 characters
+        requestId:
+          type: string
+          description: |
+            The correlation id for this request, the same value as the
+            `X-Request-ID` response header. Quote it back to an operator and it
+            leads straight to the server-side log line for this exact request —
+            which is why it is attached to failures, the responses a user is
+            likeliest to report.
+          maxLength: 128
+          examples: [7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34]
+        traceId:
+          type: string
+          description: |
+            The W3C trace id, present only when distributed tracing is enabled
+            (`OTEL_ENABLED=true`). It leads to the full trace for the request in
+            the tracing backend, so one identifier quoted by a user covers the log
+            line, this response and the span. When tracing is on, `requestId`
+            adopts this same value.
+          examples: [4bf92f3577b34da6a3ce929d0e0e4736]
+      additionalProperties: false
+
+    Meta:
+      type: object
+      title: Meta
+      description: |
+        Pagination metadata, carried in the envelope's own `meta` field rather
+        than inside `data`, so a paginated response has the same `data: [...]`
+        shape as any other collection.
+
+        It is returned by `GET /api/v1/auth/sessions`, the only paginated
+        operation today. The values are the **effective** window after defaults
+        and the ceiling were applied, not what the client asked for: a request
+        with no parameters comes back as `page: 1, limit: 20`.
+      required: [page, limit, total]
+      properties:
+        page:
+          type: integer
+          description: The 1-based index of the page returned.
+          minimum: 1
+          examples: [1]
+        limit:
+          type: integer
+          description: |
+            The effective number of items per page — never more than 100, the
+            server-side ceiling.
+          minimum: 1
+          maximum: 100
+          examples: [20]
+        total:
+          type: integer
+          description: |
+            The total number of items across all pages, not just this one.
+
+            It is counted separately from the page itself rather than inside one
+            transaction, so on a collection that is changing it can be off by
+            one for a moment — a session revoked between the count and the list.
+            That is what any paginated view of live data looks like; do not
+            treat a total that disagrees with the rows by one as an error.
+          minimum: 0
+          examples: [2]
+      additionalProperties: false
+
+    Session:
+      type: object
+      title: Session
+      description: |
+        One active session — that is, one live refresh token, which is the only
+        server-side record of a signed-in device.
+
+        **The token and its digest are never exposed.** This schema has no field
+        for either, not even a truncated "first eight characters, for display"
+        one, and that absence is the security property of the endpoint. The
+        stored SHA-256 digest is the only thing standing between a leaked
+        database row and a replayable credential; putting any part of it into a
+        response body would put it into a browser cache and every log that
+        records one. The session `id` names a session for revocation and is
+        worth nothing to an attacker, which is why it is the only identifier
+        here. A test in `internal/api/handler` serialises this type and fails if
+        a digest appears in the output, because a comment does not survive a
+        refactor and a test does.
+      required: [id, current, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: |
+            The session's own identifier — the primary key of the refresh-token
+            row, not the token and not derived from it.
+          examples: [2c9d1a7b-58e4-4f30-9c61-7de0b3f42a15]
+        current:
+          type: boolean
+          description: |
+            `true` on the session the calling request is authenticated by, which
+            is what lets a "sign out my other devices" screen avoid signing the
+            user out of the device they are looking at.
+
+            It is computed by hashing the `refresh_token` cookie the request
+            carried and comparing digests server-side; the digest itself never
+            leaves the service. **A request that sends no refresh cookie is
+            valid and marks no session current**, so a client must handle a page
+            in which every entry is `false`.
+          examples: [true]
+        createdAt:
+          type: string
+          format: date-time
+          description: When the session was started (RFC 3339, UTC).
+          examples: ["2026-09-18T09:12:44Z"]
+        expiresAt:
+          type: string
+          format: date-time
+          description: |
+            When the refresh token stops being accepted (RFC 3339, UTC).
+            Sessions past this point are never listed. Note that every refresh
+            rotates the token, so an actively used session's `id` and timestamps
+            change over its life.
+          examples: ["2026-09-25T09:12:44Z"]
+      additionalProperties: false
+
+    ChangePasswordRequest:
+      type: object
+      title: ChangePasswordRequest
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword:
+          type: string
+          format: password
+          maxLength: 72
+          description: |
+            The password in force right now, verified before anything changes.
+
+            Deliberately **no minimum length**, unlike `newPassword`. Applying
+            one here would tell a caller that the stored password cannot be
+            shorter than eight characters, and would reject a legitimate attempt
+            to replace a password that predates that rule.
+          examples: [correct-horse-battery-staple]
+        newPassword:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          description: |
+            The replacement, hashed with bcrypt server-side. The 72-byte ceiling
+            is bcrypt's own limit — it refuses longer inputs, so without the
+            bound a long password would surface as a `500` from the hashing step
+            instead of a field-level `400` the client can show.
+
+            The server does not require it to differ from the current password;
+            submitting the same value still revokes every other session.
+          examples: [a-much-better-passphrase-2026]
+      additionalProperties: false
+
+    RegisterRequest:
+      type: object
+      title: RegisterRequest
+      description: |
+        Every constraint below is enforced server-side; a violation yields `400`
+        with the offending fields listed in `errors`.
+      required: [email, password, name]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: |
+            The account's email address, which is also the login identifier and
+            is unique. 254 is the maximum length of a deliverable address.
+          examples: [ada.lovelace@example.com]
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          description: |
+            The plaintext password, hashed with bcrypt server-side and never
+            stored or returned. The 72-byte ceiling is bcrypt's own limit: it
+            refuses longer inputs, so without the bound a long password would
+            surface as a `500` from the hashing step instead of a clear `400`.
+          examples: [correct-horse-battery-staple]
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: The display name.
+          examples: [Ada Lovelace]
+      additionalProperties: false
+
+    LoginRequest:
+      type: object
+      title: LoginRequest
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          examples: [ada.lovelace@example.com]
+        password:
+          type: string
+          format: password
+          maxLength: 72
+          description: |
+            Only presence and an upper bound are validated — deliberately no
+            minimum length. Enforcing the register-time rules here would tell an
+            attacker which stored passwords cannot exist.
+          examples: [correct-horse-battery-staple]
+      additionalProperties: false
+
+    User:
+      type: object
+      title: User
+      description: |
+        The public view of an account. There is no password field and no token
+        field by construction: the service returns tokens to the handler for the
+        cookies, and they are excluded from JSON serialisation entirely.
+      required: [id, email, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+          examples: [9f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f]
+        email:
+          type: string
+          format: email
+          examples: [ada.lovelace@example.com]
+        name:
+          type: string
+          examples: [Ada Lovelace]
+      additionalProperties: false
+
+    UserWrapper:
+      type: object
+      title: UserWrapper
+      description: |
+        What register and login return under `data`. The user sits one level
+        down, under `user`, rather than at the top of `data`, because these
+        responses also used to be where tokens would have gone.
+      required: [user]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+      additionalProperties: false
+
+    Counter:
+      type: object
+      title: Counter
+      required: [value]
+      properties:
+        value:
+          type: integer
+          description: The counter's value after the operation.
+          examples: [42]
+      additionalProperties: false
+
+    Message:
+      type: object
+      title: Message
+      required: [content]
+      properties:
+        content:
+          type: string
+          examples: [Welcome to Clean Go Vite React!]
+      additionalProperties: false
+
+    CSRFToken:
+      type: object
+      title: CSRFToken
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: |
+            Three dot-separated hex fields: a 32-byte random nonce, the 8-byte
+            big-endian issue time in Unix seconds, and the 32-byte HMAC-SHA256
+            over the first two. Treat it as opaque — the server verifies the MAC
+            before it so much as reads the issue time.
+          pattern: "^[0-9a-f]{64}\\.[0-9a-f]{16}\\.[0-9a-f]{64}$"
+          examples:
+            - 3f9a1c4e7b2d8065a1f3c9e27d4b6a08e5c1f7239db04a6c8e2f5107b3d9a4c6.0000000068cd4f80.7c4e91a2f0b83d65ce17a94f2b60d8371e5c9042a7f3b16d8e05c2947af31b6e
+      additionalProperties: false
+
+    HealthStatus:
+      type: object
+      title: HealthStatus
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          description: |
+            `ok` when everything probed is healthy, `degraded` when at least one
+            dependency check failed. A `degraded` readiness result is what turns
+            the response into a `503`.
+          enum: [ok, degraded]
+        message:
+          type: string
+          description: |
+            A summary; on failure it counts the failed checks, e.g.
+            `1 dependency checks failed`.
+          examples: [All dependencies healthy]
+        details:
+          type: object
+          description: |
+            Per-dependency detail on the readiness probes (one key per
+            dependency, today just `database`, each with a `status` and, when
+            unhealthy, an `error`). The liveness probe probes nothing and puts a
+            `timestamp` here instead.
+          additionalProperties: true
+      additionalProperties: false
+
+    MessageEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/APIResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/Message"
+
+    CounterEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/APIResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/Counter"
+
+    CSRFTokenEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/APIResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/CSRFToken"
+
+    UserEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/APIResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/User"
+
+    UserWrapperEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/APIResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/UserWrapper"
+
+    SessionListEnvelope:
+      description: |
+        The paginated session list. `data` is the array itself, not an object
+        wrapping it, and the window lives in the envelope's `meta` — so a client
+        reads `data` the same way it reads every other collection and only looks
+        at `meta` if it paginates. `meta` is required on this response.
+      allOf:
+        - $ref: "#/components/schemas/APIResponse"
+        - type: object
+          required: [data, meta]
+          properties:
+            data:
+              type: array
+              description: |
+                The page of sessions, newest first, ordered by creation time
+                with the id as a tiebreak so two tokens minted in the same clock
+                tick page deterministically instead of swapping places between
+                requests.
+              items:
+                $ref: "#/components/schemas/Session"
+            meta:
+              $ref: "#/components/schemas/Meta"
+
+    HealthEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/APIResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/HealthStatus"
+
+    HealthErrorEnvelope:
+      description: |
+        The readiness failure body. It is the error envelope *with* a `data`
+        payload, which is unusual for this API: the failed checks are the
+        diagnostic, so they are returned rather than dropped.
+
+        It also carries no `requestId` or `traceId` — the readiness handler
+        writes this body directly instead of going through the shared error path.
+      type: object
+      required: [success, message, data]
+      properties:
+        success:
+          type: boolean
+          const: false
+        message:
+          type: string
+          examples: ["1 dependency checks failed"]
+        data:
+          $ref: "#/components/schemas/HealthStatus"
+      additionalProperties: false
+
+    EmptyEnvelope:
+      description: |
+        A success envelope with no payload. `data` is omitted from the JSON
+        rather than sent as `null`.
+      allOf:
+        - $ref: "#/components/schemas/APIResponse"
+        - type: object
+          properties:
+            data:
+              description: Never present on this response.
+
+  responses:
+    ValidationFailed:
+      description: |
+        The request body was malformed, exceeded the body-size limit
+        (`MAX_REQUEST_BODY_BYTES`, default 1 MiB), or failed a validation rule.
+        When individual fields failed, each is listed in `errors` under its JSON
+        name.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            fieldErrors:
+              summary: One or more fields failed validation
+              value:
+                success: false
+                message: Validation failed
+                errors:
+                  email: Must be a valid email address
+                  password: Must be at least 8 characters
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+            malformedBody:
+              summary: The body was not valid JSON for this schema
+              value:
+                success: false
+                message: Invalid request body
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+            bodyTooLarge:
+              summary: The body exceeded the configured limit
+              value:
+                success: false
+                message: Request body is too large
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+
+    Unauthorized:
+      description: |
+        No usable session. Either the `access_token` cookie was absent — which is
+        also what an anonymous visitor looks like, so do not surface it as an
+        error — or it failed verification, typically because it expired. On
+        `Invalid or expired token`, try `POST /api/v1/auth/refresh` once before
+        redirecting to a login screen.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            missing:
+              summary: No access_token cookie was sent
+              value:
+                success: false
+                message: Missing authentication token
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+            invalid:
+              summary: The token did not verify, or has expired
+              value:
+                success: false
+                message: Invalid or expired token
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+
+    CSRFRejected:
+      description: |
+        The `X-CSRF-Token` header was missing or did not verify. The usual cause
+        on a long-lived page is simply age: these tokens cannot be revoked, so
+        they expire (default 12 hours) — fetch a new one from `GET /api/v1/csrf` and
+        retry once before showing the user anything.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            missing:
+              summary: The header was absent
+              value:
+                success: false
+                message: Missing CSRF token
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+            invalid:
+              summary: The MAC did not verify, or the token has expired
+              value:
+                success: false
+                message: Invalid CSRF token
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+
+    NotFound:
+      description: |
+        The addressed thing does not exist. Two distinct causes share this
+        status, and the `message` tells them apart:
+
+        - `Route not found` — no route matched the path at all. The fallback
+          handler returns the same envelope as every other response rather than
+          an empty body, so a client's parser never has to special-case a typo'd
+          URL. This is also what the **unversioned** API surface returns: there
+          are no `/api/...` aliases for the `/api/v1/...` routes, so a client
+          still pointed at the old base URL sees this and not a redirect. (The
+          three `/api/health*` paths are the exception and are real routes.)
+        - `User not found` — from `GET /api/v1/auth/me` and
+          `DELETE /api/v1/auth/me`: the access token verified but the account
+          behind it no longer exists, because the row was deleted while an
+          unexpired token was still in the wild. Treat it like a `401` — discard
+          the session and sign in again.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            routeNotFound:
+              summary: No route matched the request path
+              value:
+                success: false
+                message: Route not found
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+            userNotFound:
+              summary: A valid token for an account that has since been deleted
+              value:
+                success: false
+                message: User not found
+                requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+
+    MethodNotAllowed:
+      description: |
+        The path exists but not for this method — for example `DELETE
+        /api/v1/counter`. Like the `404`, it is returned in the standard envelope.
+
+        No operation below references this response, and it cannot: OpenAPI ties
+        a response to one path *and* method, whereas a `405` is by definition the
+        answer to a method that has no operation. It is defined here so clients
+        and generated error types still know the shape. A linter reporting it as
+        an unused component is expected.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            success: false
+            message: Method not allowed
+            requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+
+    TooManyRequests:
+      description: |
+        The client IP exhausted the global token bucket (default 20 requests per
+        second sustained, burst 40). The bucket refills continuously, so a short
+        pause is enough.
+
+        No `Retry-After` or `X-RateLimit-*` headers are sent; the body is the
+        standard envelope and nothing more.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            success: false
+            message: Too many requests
+            requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+
+    TooManyRequestsAuth:
+      description: |
+        The client IP exhausted the **credential-endpoint** bucket, which is
+        deliberately far stricter than the global one — the default is 0.2
+        requests per second with a burst of 5, against 20/second everywhere else.
+        Register, login and refresh have their own budget precisely because a
+        limit generous enough for normal browsing is generous enough to guess
+        passwords with.
+
+        Expect this well before the global limit on these three routes. The body
+        is identical to the global `429`, with no `Retry-After` or `X-RateLimit-*`
+        headers; at the default rate the bucket regains one request roughly every
+        five seconds.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            success: false
+            message: Too many requests
+            requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+
+    InternalServerError:
+      description: |
+        Something failed server-side, including a recovered panic. The message is
+        always this generic string: the real cause is written to the logs and the
+        trace, never to the body, so a driver error or an internal hostname
+        cannot leak. Quote `requestId` or `traceId` to an operator to have the
+        actual cause looked up.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            success: false
+            message: Internal server error
+            requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    GatewayTimeout:
+      description: |
+        The request exceeded the server-side deadline
+        (`SERVER_REQUEST_TIMEOUT`, default 10s) and was abandoned. Whether the
+        work completed is unknown, so a retry of a write must be safe to repeat.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            success: false
+            message: Request timed out
+            requestId: 7b1f0c4a-2e58-4d31-9a6b-5c8e0d2f1a34
+
+    Ready:
+      description: Every dependency answered; this instance can serve traffic.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HealthEnvelope"
+          example:
+            success: true
+            message: Service is ready
+            data:
+              status: ok
+              message: All dependencies healthy
+              details:
+                database:
+                  status: healthy
+
+    NotReady:
+      description: |
+        At least one dependency check failed. The process itself is fine — this
+        is the signal to stop routing traffic here, not to restart it; that is
+        what the separate liveness probe is for. `data.details` names the
+        dependency and carries its error.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HealthErrorEnvelope"
+          example:
+            success: false
+            message: 1 dependency checks failed
+            data:
+              status: degraded
+              message: 1 dependency checks failed
+              details:
+                database:
+                  status: unhealthy
+                  error: "dial tcp 127.0.0.1:5432: connect: connection refused"

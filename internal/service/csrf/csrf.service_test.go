@@ -5,6 +5,8 @@ import (
 )
 
 func TestNewCSRFService(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		secret string
@@ -21,7 +23,9 @@ func TestNewCSRFService(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewCSRFService(tt.secret)
+			t.Parallel()
+
+			service := NewCSRFService(tt.secret, testCSRFTTL)
 
 			if service == nil {
 				t.Errorf("expected non-nil service, got nil")
