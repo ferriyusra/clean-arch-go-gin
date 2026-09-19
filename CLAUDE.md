@@ -63,9 +63,11 @@ Clean Architecture, dependencies point inward only:
 - **logging/**: `slog` setup and the context-scoped logger accessor.
 - **tracing/**: OpenTelemetry setup, the in-house GORM span plugin, and the
   trace-id helpers. Off unless `OTEL_ENABLED=true`.
+- **repository/dbtx/**: carries the ambient transaction in `context.Context`;
+  `dbtx.Conn(ctx, r.db)` is how every repository gets its connection.
 - **platform/**: `config.go` (env parsing), `config_validate.go` (startup
   validation), `database.go` (dialector, pool, ping/retry, close, health probe),
-  `migrate.go` (schema + seed).
+  `migrate.go` (the versioned migration ledger).
 - **di/container.go**: the single wiring point — validates config, builds the gin
   engine and its middleware chain, opens and migrates the DB, constructs repos →
   services → handlers → routes.
@@ -77,10 +79,19 @@ SIGINT/SIGTERM with `cfg.Server.ShutdownTimeout` and `container.Close()`.
 
 Cross-cutting facts that are not visible from a single file:
 
-- **No migration tool.** `platform.Migrate(db)` runs `AutoMigrate` for every
-  entity and seeds the counter/message rows. Repository constructors no longer
-  migrate and no longer return an error. Adding a table means adding it to
-  `entities()` in `internal/platform/migrate.go`.
+- **Migrations are versioned and forward-only.** `platform.Migrate(db)` applies
+  the ordered `migrations()` list in `internal/platform/migrate.go`, each in its
+  own transaction with its `schema_migrations` ledger row. Append a new
+  `Migration`; never edit or renumber an existing one. `AutoMigrate` survives
+  only inside migration 1, because it cannot drop or rename anything. Startup
+  validates the list and rejects duplicate or out-of-order versions.
+  `DATABASE_AUTO_MIGRATE=false` skips the run so production can migrate as a
+  separate step.
+- **Multi-row writes go through `TxManager.WithinTx`.** The transaction rides in
+  the `context.Context` and repositories pick it up through `dbtx.Conn(ctx,
+  r.db)`, so no repository signature mentions it. Nested calls reuse the outer
+  transaction rather than opening a second one, which sqlite would block on.
+  `Register` and `Refresh` both rely on this.
 - **The container can reuse an injected DB**: it only calls
   `platform.InitializeDatabase` when `cfg.Database.Gorm` is nil, and
   `Container.Close()` then leaves that injected handle alone. Tests rely on this.
@@ -105,7 +116,8 @@ Cross-cutting facts that are not visible from a single file:
 
 ## Adding a Feature (TDD order)
 
-1. `model/entity/<x>.go` — GORM entity, plus its entry in `platform/migrate.go`
+1. `model/entity/<x>.go` — GORM entity, plus a new `Migration` appended to
+   `migrations()` in `platform/migrate.go` (and the entity added to `entities()`)
 2. `repository/interfaces/<x>.repository_interface.go` — contract
 3. `make mocks` — regenerate repository **and** service mocks
 4. `repository/implementations/<x>/` — `<x>.gorm.go` (struct + constructor) then

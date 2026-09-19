@@ -88,7 +88,7 @@ internal/
 ├── apperr/               # the application error type and its sentinels
 ├── logging/              # slog setup + context-scoped logger
 ├── tracing/              # OpenTelemetry setup, GORM spans, trace-id helpers
-├── platform/             # config + validation, database, migrations
+├── platform/             # config + validation, database, versioned migrations
 ├── di/                   # dependency injection container
 └── testutil/             # shared test harness (assertions, in-memory DB, HTTP)
 ```
@@ -263,7 +263,9 @@ Copy `env.example` to `.env`; it documents every variable. The important ones:
 | `OTEL_TRACES_EXPORTER` | `otlp` (a collector) or `console` (stdout, no collector needed) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | defaults to `http://localhost:4318` |
 | `OTEL_TRACES_SAMPLER_ARG` | fraction of new traces kept, 0 to 1 |
-| `RATE_LIMIT_RPS`, `RATE_LIMIT_BURST` | per-client-IP token bucket |
+| `RATE_LIMIT_RPS`, `RATE_LIMIT_BURST` | per-client-IP token bucket for the API |
+| `AUTH_RATE_LIMIT_RPS`, `AUTH_RATE_LIMIT_BURST` | a separate, much tighter budget for the credential endpoints |
+| `DATABASE_AUTO_MIGRATE` | run pending migrations at startup; set `false` in production |
 | `TRUSTED_PROXIES` | empty means trust none, so `ClientIP` is the direct peer |
 
 Configuration is validated at startup and **every** problem is reported at once,
@@ -290,13 +292,58 @@ rather than on message strings.
 
 ## Database Schema
 
-There is no migration tool. `platform.Migrate` runs `AutoMigrate` for every
-entity once at startup and seeds the demo rows; adding a table means adding it to
-the list in [`internal/platform/migrate.go`](internal/platform/migrate.go).
+Migrations are versioned and forward-only, in
+[`internal/platform/migrate.go`](internal/platform/migrate.go). Each one is a Go
+function with a version number, applied in order inside its own transaction
+together with the `schema_migrations` row that records it, so a failure leaves
+the database on the last version that fully succeeded.
 
-`AutoMigrate` is additive only — it creates tables, columns and indexes but never
-drops or rewrites them. A destructive change (renaming a column, backfilling
-data) needs a real migration tool such as golang-migrate or goose alongside it.
+Adding a change means appending a `Migration` to the list — never editing or
+renumbering an existing one, because a version that has already run somewhere is
+a fact. A startup check rejects duplicate or out-of-order versions, which is the
+mistake two branches make when both add "the next" migration and are merged.
+
+`AutoMigrate` is still used, but only *inside* migration 1, where creating
+tables is all it has to do. It is additive: it cannot drop or rename a column,
+which is why dropping the old plaintext refresh-token column had to be written
+out as migration 3.
+
+There are no down migrations. Reversing a schema change in production is nearly
+always a restore or a new forward migration, and a down step that is never
+exercised is a false sense of safety.
+
+Concurrency is not coordinated: two instances booting against an empty database
+at the same moment will both try, and the loser fails on the ledger primary key
+and exits. That is safe but noisy. In production set `DATABASE_AUTO_MIGRATE=false`
+and run migrations as their own step.
+
+## Transactions
+
+A service that must write more than one row wraps the work in
+`TxManager.WithinTx`:
+
+```go
+err := s.txManager.WithinTx(ctx, func(ctx context.Context) error {
+    if _, err := s.userRepository.Create(ctx, user); err != nil {
+        return err
+    }
+    return s.storeToken(ctx, ...)   // joins the same transaction
+})
+```
+
+The transaction travels in the `context.Context`, so repositories join it
+without knowing it exists: each one resolves its connection through
+`dbtx.Conn(ctx, r.db)` and gets either the ambient transaction or the pool.
+Nothing in a repository signature changes, and the boundary stays in the
+service that knows which writes belong together.
+
+Nested calls reuse the outer transaction rather than opening a second one —
+without that, sqlite, which allows a single writer, would block until the
+deadline instead of failing.
+
+`Register` and `Refresh` both use it. Before, a failure while storing the first
+refresh token left an account that existed but could not sign in, and whose
+email was permanently claimed by the unique index.
 
 ## Credits
 
