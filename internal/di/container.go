@@ -245,6 +245,11 @@ func newRouter(cfg *platform.Config, logger *slog.Logger, metrics *observability
 	// text logger and recovery, both of which are replaced here.
 	r := gin.New()
 
+	// gin leaves this off, which quietly makes the NoMethod handler dead code:
+	// a DELETE to a GET-only path would answer 404 "Route not found" instead of
+	// 405, telling a client the path does not exist when the problem is the verb.
+	r.HandleMethodNotAllowed = true
+
 	// An empty list means "trust no proxy", so ClientIP reports the direct peer
 	// rather than a spoofable X-Forwarded-For value.
 	_ = r.SetTrustedProxies(cfg.Security.TrustedProxies)
@@ -262,13 +267,20 @@ func newRouter(cfg *platform.Config, logger *slog.Logger, metrics *observability
 	}
 
 	r.Use(middleware.RequestID(logger))
-	r.Use(middleware.Recovery())
 
-	// After Recovery so a panicked request is counted with the 500 the recovery
-	// handler writes, rather than escaping the histogram entirely.
+	// Metrics go OUTSIDE Recovery, not inside it. A panic unwinds through every
+	// c.Next() above it, and the middleware records after its c.Next() with no
+	// defer, so from inside Recovery a panicked request would be counted zero
+	// times — the metrics would be blind to the worst failure the service has.
+	// From outside, Recovery returns normally and the real 500 is observed.
+	//
+	// A defer inside the middleware would not fix it: the defer would run during
+	// unwinding, before Recovery writes the 500, and record a 200.
 	if metrics != nil {
 		r.Use(metrics.Middleware())
 	}
+
+	r.Use(middleware.Recovery())
 	r.Use(middleware.AccessLog())
 	r.Use(middleware.SecurityHeaders(cfg.Auth.DevMode))
 	r.Use(cors.New(cors.Config{
@@ -310,11 +322,20 @@ func (c *Container) Close() error {
 	// the most likely to be holding an open scrape or a 30-second profile.
 	if c.AdminServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), adminShutdownTimeout)
-		if err := c.AdminServer.Shutdown(ctx); err != nil {
+		err := c.AdminServer.Shutdown(ctx)
+		cancel()
+
+		// The field is deliberately NOT set to nil: StartAdmin's goroutine may
+		// still be running, and writing here while it reads would be a data race.
+		// Shutdown is already idempotent, so a second Close is harmless.
+		//
+		// A deadline overrun is the expected case, not a fault: the timeout is
+		// short on purpose so a deploy never waits on an in-flight 30s profile.
+		// Reporting it as an error would put a scary line in the logs of every
+		// normal shutdown that happened to overlap a scrape.
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			errs = append(errs, fmt.Errorf("shutting down the admin listener: %w", err))
 		}
-		cancel()
-		c.AdminServer = nil
 	}
 
 	if c.tracerShutdown != nil {
@@ -418,15 +439,24 @@ func (c *Container) StartAdmin() {
 		return
 	}
 
-	addr := c.AdminServer.Addr
+	// Everything the goroutine needs is captured here rather than read from c
+	// inside it. Close runs concurrently with this goroutine, and reading
+	// c.AdminServer there would be a data race — and worse, if Close won, a nil
+	// dereference that panics the process during shutdown.
+	srv := c.AdminServer
+	logger := c.Logger
+	addr := srv.Addr
+	metricsOn := c.Config.Observability.MetricsEnabled
+	pprofOn := c.Config.Observability.PprofEnabled
+
 	go func() {
-		c.Logger.Info("admin listener starting",
+		logger.Info("admin listener starting",
 			"addr", addr,
-			"metrics", c.Config.Observability.MetricsEnabled,
-			"pprof", c.Config.Observability.PprofEnabled,
+			"metrics", metricsOn,
+			"pprof", pprofOn,
 		)
-		if err := c.AdminServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			c.Logger.Error("admin listener", "addr", addr, "error", err.Error())
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("admin listener", "addr", addr, "error", err.Error())
 		}
 	}()
 }
