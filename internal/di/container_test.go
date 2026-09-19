@@ -2,6 +2,7 @@ package di_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -42,7 +43,7 @@ func newTestContainer(t *testing.T) *di.Container {
 func csrfToken(t *testing.T, engine *gin.Engine) string {
 	t.Helper()
 
-	rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodGet, "/api/csrf", nil))
+	rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodGet, "/api/v1/csrf", nil))
 	testutil.Equal(t, rec.Code, http.StatusOK, "csrf status")
 
 	return testutil.DataAs[response.CSRFTokenResponse](t, rec).Token
@@ -56,7 +57,7 @@ func TestFullAuthenticationFlow(t *testing.T) {
 	csrf := csrfToken(t, engine)
 
 	// 1. Register.
-	registerRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+	registerRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/register", map[string]string{
 		"email":    "e2e@example.com",
 		"password": "password123",
 		"name":     "End To End",
@@ -70,14 +71,14 @@ func TestFullAuthenticationFlow(t *testing.T) {
 
 	// 2. The access cookie authenticates a protected route.
 	meRec := testutil.Do(engine, testutil.WithCookie(
-		testutil.JSONRequest(t, http.MethodGet, "/api/auth/me", nil),
+		testutil.JSONRequest(t, http.MethodGet, "/api/v1/auth/me", nil),
 		middleware.AccessTokenCookie, accessToken,
 	))
 	testutil.Equal(t, meRec.Code, http.StatusOK, "me status")
 	testutil.Equal(t, testutil.DataAs[response.GetUser](t, meRec).Email, "e2e@example.com", "email")
 
 	// 3. Registering the same address again is a conflict, not a bad request.
-	duplicateRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+	duplicateRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/register", map[string]string{
 		"email":    "e2e@example.com",
 		"password": "password123",
 		"name":     "Impostor",
@@ -85,7 +86,7 @@ func TestFullAuthenticationFlow(t *testing.T) {
 	testutil.Equal(t, duplicateRec.Code, http.StatusConflict, "duplicate register status")
 
 	// 4. Login issues a fresh pair.
-	loginRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/login", map[string]string{
+	loginRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/login", map[string]string{
 		"email":    "e2e@example.com",
 		"password": "password123",
 	}))
@@ -94,7 +95,7 @@ func TestFullAuthenticationFlow(t *testing.T) {
 
 	// 5. Refresh exchanges the refresh cookie for a new access token.
 	refreshReq := testutil.WithCookie(
-		testutil.JSONRequest(t, http.MethodPost, "/api/auth/refresh", nil),
+		testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/refresh", nil),
 		middleware.RefreshTokenCookie, loginRefresh,
 	)
 	refreshReq.Header.Set("X-CSRF-Token", csrf)
@@ -102,7 +103,7 @@ func TestFullAuthenticationFlow(t *testing.T) {
 
 	// 6. Logout revokes the stored refresh tokens.
 	logoutReq := testutil.WithCookie(
-		testutil.JSONRequest(t, http.MethodPost, "/api/auth/logout", nil),
+		testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/logout", nil),
 		middleware.AccessTokenCookie, accessToken,
 	)
 	logoutReq.Header.Set("X-CSRF-Token", csrf)
@@ -111,7 +112,7 @@ func TestFullAuthenticationFlow(t *testing.T) {
 	// 7. The revoked refresh token is no longer accepted, even though the JWT
 	// itself is still within its validity window.
 	afterLogout := testutil.WithCookie(
-		testutil.JSONRequest(t, http.MethodPost, "/api/auth/refresh", nil),
+		testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/refresh", nil),
 		middleware.RefreshTokenCookie, loginRefresh,
 	)
 	afterLogout.Header.Set("X-CSRF-Token", csrf)
@@ -125,8 +126,8 @@ func TestProtectedRoutesRejectAnonymousRequests(t *testing.T) {
 		method string
 		path   string
 	}{
-		{http.MethodGet, "/api/auth/me"},
-		{http.MethodGet, "/api/counter"},
+		{http.MethodGet, "/api/v1/auth/me"},
+		{http.MethodGet, "/api/v1/counter"},
 	}
 
 	for _, route := range routes {
@@ -142,7 +143,7 @@ func TestProtectedRoutesRejectAnonymousRequests(t *testing.T) {
 func TestStateChangingRoutesRequireCSRF(t *testing.T) {
 	engine := newTestContainer(t).Router
 
-	registerRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+	registerRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/register", map[string]string{
 		"email": "csrf@example.com", "password": "password123", "name": "CSRF User",
 	}))
 	testutil.Equal(t, registerRec.Code, http.StatusCreated, "register status")
@@ -150,14 +151,14 @@ func TestStateChangingRoutesRequireCSRF(t *testing.T) {
 
 	// Authenticated, but with no CSRF header.
 	rec := testutil.Do(engine, testutil.WithCookie(
-		testutil.JSONRequest(t, http.MethodPost, "/api/counter", nil),
+		testutil.JSONRequest(t, http.MethodPost, "/api/v1/counter", nil),
 		middleware.AccessTokenCookie, accessToken,
 	))
 	testutil.Equal(t, rec.Code, http.StatusForbidden, "status without a CSRF token")
 
 	// The same request, with the header.
 	withToken := testutil.WithCookie(
-		testutil.JSONRequest(t, http.MethodPost, "/api/counter", nil),
+		testutil.JSONRequest(t, http.MethodPost, "/api/v1/counter", nil),
 		middleware.AccessTokenCookie, accessToken,
 	)
 	withToken.Header.Set("X-CSRF-Token", csrfToken(t, engine))
@@ -193,7 +194,7 @@ func TestUnknownRoutesReturnTheEnvelope(t *testing.T) {
 func TestEveryResponseCarriesSecurityHeadersAndARequestID(t *testing.T) {
 	engine := newTestContainer(t).Router
 
-	rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodGet, "/api/message", nil))
+	rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodGet, "/api/v1/message", nil))
 
 	testutil.Equal(t, rec.Header().Get("X-Content-Type-Options"), "nosniff", "nosniff header")
 	testutil.True(t, rec.Header().Get(middleware.RequestIDHeader) != "", "request id header")
@@ -221,7 +222,7 @@ func TestContainerCloseLeavesAnInjectedDatabaseAlone(t *testing.T) {
 
 	testutil.NoError(t, container.Close())
 
-	rec := testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, "/api/message", nil))
+	rec := testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, "/api/v1/message", nil))
 	testutil.Equal(t, rec.Code, http.StatusOK, "the database still works after Close")
 }
 
@@ -238,8 +239,8 @@ func TestErrorResponsesAreTraceableEndToEnd(t *testing.T) {
 		status int
 	}{
 		{name: "unknown route", method: http.MethodGet, path: "/api/nope", status: http.StatusNotFound},
-		{name: "unauthenticated", method: http.MethodGet, path: "/api/auth/me", status: http.StatusUnauthorized},
-		{name: "missing csrf token", method: http.MethodPost, path: "/api/auth/refresh", status: http.StatusForbidden},
+		{name: "unauthenticated", method: http.MethodGet, path: "/api/v1/auth/me", status: http.StatusUnauthorized},
+		{name: "missing csrf token", method: http.MethodPost, path: "/api/v1/auth/refresh", status: http.StatusForbidden},
 	}
 
 	for _, tc := range cases {
@@ -262,7 +263,7 @@ func TestErrorResponsesAreTraceableEndToEnd(t *testing.T) {
 func TestValidationErrorsAreCamelCaseAndCorrelated(t *testing.T) {
 	engine := newTestContainer(t).Router
 
-	rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+	rec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/register", map[string]string{
 		"email": "not-an-email",
 	}))
 
@@ -287,7 +288,7 @@ func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
 	engine := newTestContainer(t).Router
 	csrf := csrfToken(t, engine)
 
-	registerRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+	registerRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/register", map[string]string{
 		"email": "rotation@example.com", "password": "password123", "name": "Rotation",
 	}))
 	testutil.Equal(t, registerRec.Code, http.StatusCreated, "register status")
@@ -319,14 +320,14 @@ func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
 func TestLoginDoesNotRevealWhichEmailsExist(t *testing.T) {
 	engine := newTestContainer(t).Router
 
-	testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+	testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/register", map[string]string{
 		"email": "known@example.com", "password": "password123", "name": "Known",
 	}))
 
-	unknown := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/login", map[string]string{
+	unknown := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/login", map[string]string{
 		"email": "nobody@example.com", "password": "password123",
 	}))
-	wrongPassword := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/login", map[string]string{
+	wrongPassword := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/login", map[string]string{
 		"email": "known@example.com", "password": "the-wrong-password",
 	}))
 
@@ -339,7 +340,7 @@ func refreshRequest(t *testing.T, refreshToken, csrf string) *http.Request {
 	t.Helper()
 
 	req := testutil.WithCookie(
-		testutil.JSONRequest(t, http.MethodPost, "/api/auth/refresh", nil),
+		testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/refresh", nil),
 		middleware.RefreshTokenCookie, refreshToken,
 	)
 	req.Header.Set("X-CSRF-Token", csrf)
@@ -371,15 +372,106 @@ func TestAuthEndpointsHaveTheirOwnRateLimit(t *testing.T) {
 	// The burst is spent on the first two attempts, whatever they answer.
 	for i := 0; i < 2; i++ {
 		rec := testutil.Do(container.Router,
-			testutil.JSONRequest(t, http.MethodPost, "/api/auth/login", credentials))
+			testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/login", credentials))
 		testutil.True(t, rec.Code != http.StatusTooManyRequests, "an attempt within the burst")
 	}
 
 	throttled := testutil.Do(container.Router,
-		testutil.JSONRequest(t, http.MethodPost, "/api/auth/login", credentials))
+		testutil.JSONRequest(t, http.MethodPost, "/api/v1/auth/login", credentials))
 	testutil.Equal(t, throttled.Code, http.StatusTooManyRequests, "the attempt past the burst")
 
 	// Ordinary traffic is untouched: the two limiters keep separate budgets.
-	public := testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, "/api/message", nil))
+	public := testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, "/api/v1/message", nil))
 	testutil.Equal(t, public.Code, http.StatusOK, "a public endpoint after the auth limit is hit")
+}
+
+// TestAdminEndpointsAreNotOnThePublicRouter is the test that keeps metrics and
+// pprof from leaking onto the API.
+//
+// The whole design of the admin listener rests on these paths being absent
+// here. Mounting them on the public router would expose operational detail and,
+// with pprof, an unauthenticated heap dump, on whatever address serves the API.
+func TestAdminEndpointsAreNotOnThePublicRouter(t *testing.T) {
+	t.Setenv("METRICS_ENABLED", "true")
+	t.Setenv("PPROF_ENABLED", "true")
+
+	container := newTestContainer(t)
+
+	paths := []string{
+		"/metrics",
+		"/healthz",
+		"/debug/pprof/",
+		"/debug/pprof/heap",
+		"/debug/pprof/profile",
+		"/api/v1/metrics",
+		"/api/metrics",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			rec := testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, path, nil))
+			testutil.Equal(t, rec.Code, http.StatusNotFound, "public router must not serve "+path)
+		})
+	}
+}
+
+// TestAdminServerIsNilWhenBothSignalsAreOff guards the default. Building the
+// listener unconditionally would open a port nobody asked for.
+func TestAdminServerIsNilWhenBothSignalsAreOff(t *testing.T) {
+	container := newTestContainer(t)
+
+	if container.AdminServer != nil {
+		t.Fatalf("expected no admin server by default, got one on %s", container.AdminServer.Addr)
+	}
+
+	// StartAdmin and Close must both be safe with nothing to serve.
+	container.StartAdmin()
+	testutil.NoError(t, container.Close())
+}
+
+// TestAdminServerServesMetricsWhenEnabled checks the listener is built and
+// wired to the registry, without binding a port.
+func TestAdminServerServesMetricsWhenEnabled(t *testing.T) {
+	t.Setenv("METRICS_ENABLED", "true")
+
+	container := newTestContainer(t)
+
+	if container.AdminServer == nil {
+		t.Fatal("expected an admin server when METRICS_ENABLED is true")
+	}
+	if !strings.HasPrefix(container.AdminServer.Addr, "127.0.0.1:") {
+		t.Errorf("admin listener should default to loopback, got %q", container.AdminServer.Addr)
+	}
+
+	// Drive a request through the public router first so there is something to
+	// report, then scrape the admin handler directly.
+	_ = testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, "/api/v1/message", nil))
+
+	rec := httptest.NewRecorder()
+	container.AdminServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	testutil.Equal(t, rec.Code, http.StatusOK, "metrics status")
+	if !strings.Contains(rec.Body.String(), "http_requests_total") {
+		t.Errorf("expected http_requests_total in the scrape, got:\n%s", rec.Body.String())
+	}
+	// The route label must be the pattern, never the raw path.
+	if !strings.Contains(rec.Body.String(), `route="/api/v1/message"`) {
+		t.Errorf("expected the route pattern as a label, got:\n%s", rec.Body.String())
+	}
+}
+
+// TestPprofIsAbsentFromTheAdminListenerWhenDisabled makes the off switch real:
+// a disabled endpoint is not registered at all, rather than guarded at runtime.
+func TestPprofIsAbsentFromTheAdminListenerWhenDisabled(t *testing.T) {
+	t.Setenv("METRICS_ENABLED", "true")
+
+	container := newTestContainer(t)
+	if container.AdminServer == nil {
+		t.Fatal("expected an admin server")
+	}
+
+	rec := httptest.NewRecorder()
+	container.AdminServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/heap", nil))
+
+	testutil.Equal(t, rec.Code, http.StatusNotFound, "pprof must be absent when disabled")
 }

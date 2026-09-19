@@ -20,11 +20,21 @@ type APIResponse struct {
 	TraceID   string `json:"traceId,omitempty"`
 }
 
-// Meta holds pagination metadata
+// Meta holds pagination metadata.
+//
+// Total is int64 because that is what a SQL COUNT returns and what every
+// repository counting method hands back. Narrowing it to int at the boundary
+// would be a conversion with nothing to gain: the JSON key and its encoding are
+// identical either way, and on a 32-bit build the narrowing could overflow.
 type Meta struct {
-	Page  int `json:"page"`
-	Limit int `json:"limit"`
-	Total int `json:"total"`
+	Page  int   `json:"page"`
+	Limit int   `json:"limit"`
+	Total int64 `json:"total"`
+}
+
+// NewMeta builds the pagination metadata for a page of results.
+func NewMeta(page, limit int, total int64) *Meta {
+	return &Meta{Page: page, Limit: limit, Total: total}
 }
 
 // OK returns a success response with data

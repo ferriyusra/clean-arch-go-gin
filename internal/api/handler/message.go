@@ -20,7 +20,7 @@ func NewMessageHandler(svc message.MessageService) *MessageHandler {
 	}
 }
 
-// GetMessage handles GET /api/message requests
+// GetMessage handles GET /api/v1/message requests
 func (h *MessageHandler) GetMessage(c *gin.Context) {
 	msg, err := h.service.GetMessage(c.Request.Context())
 	if err != nil {

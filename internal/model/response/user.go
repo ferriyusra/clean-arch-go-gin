@@ -39,6 +39,21 @@ type RefreshResponse struct {
 	RefreshToken string `json:"-"`
 }
 
+// ChangePasswordResponse carries the token pair minted for the client that
+// changed the password.
+//
+// Changing a password revokes every session for the account, including the one
+// that made the request. Re-issuing a pair for the acting client is what keeps
+// that client signed in while every other device is signed out, which is the
+// behaviour a user expects and the reason they changed the password.
+//
+// The tokens are json:"-" for the same reason as everywhere else: they reach
+// the client as HttpOnly cookies, never in a body.
+type ChangePasswordResponse struct {
+	AccessToken  string `json:"-"`
+	RefreshToken string `json:"-"`
+}
+
 type CSRFTokenResponse struct {
 	Token string `json:"token"`
 }

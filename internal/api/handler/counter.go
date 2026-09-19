@@ -20,7 +20,7 @@ func NewCounterHandler(svc counter.CounterService) *CounterHandler {
 	}
 }
 
-// GetCounter handles GET /api/counter requests
+// GetCounter handles GET /api/v1/counter requests
 func (h *CounterHandler) GetCounter(c *gin.Context) {
 	value, err := h.service.GetCounter(c.Request.Context())
 	if err != nil {
@@ -31,7 +31,7 @@ func (h *CounterHandler) GetCounter(c *gin.Context) {
 	OK(c, http.StatusOK, "Counter retrieved", value)
 }
 
-// IncrementCounter handles POST /api/counter requests
+// IncrementCounter handles POST /api/v1/counter requests
 func (h *CounterHandler) IncrementCounter(c *gin.Context) {
 	value, err := h.service.IncrementCounter(c.Request.Context())
 	if err != nil {

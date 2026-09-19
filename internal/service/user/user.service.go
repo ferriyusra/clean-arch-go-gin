@@ -24,6 +24,16 @@ type UserService interface {
 	Login(ctx context.Context, req *request.LoginRequest) (*response.LoginResponse, error)
 	Refresh(ctx context.Context, refreshToken string) (*response.RefreshResponse, error)
 	GetUser(ctx context.Context, userID string) (*response.GetUser, error)
+	// ListSessions reports the user's active refresh-token sessions, one page
+	// at a time. currentRefreshToken is the token the calling request presented,
+	// used only to mark which session is the caller's own; pass "" when the
+	// request carries none.
+	ListSessions(ctx context.Context, userID uuid.UUID, currentRefreshToken string, page request.Pagination) (*response.SessionList, error)
+	// ChangePassword replaces the password, ends every session for the account
+	// and returns a fresh pair for the client that asked.
+	ChangePassword(ctx context.Context, userID uuid.UUID, req *request.ChangePasswordRequest) (*response.ChangePasswordResponse, error)
+	// DeleteAccount removes the account and every session it owns.
+	DeleteAccount(ctx context.Context, userID uuid.UUID) error
 	StoreRefreshToken(ctx context.Context, userID uuid.UUID, tokenStr string, expiresAt time.Time) error
 	RevokeRefreshTokens(ctx context.Context, userID uuid.UUID) error
 	PurgeExpiredRefreshTokens(ctx context.Context) (int64, error)

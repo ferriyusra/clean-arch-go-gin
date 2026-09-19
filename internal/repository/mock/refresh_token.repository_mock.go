@@ -43,6 +43,45 @@ func (m *MockRefreshTokenRepository) EXPECT() *MockRefreshTokenRepositoryMockRec
 	return m.recorder
 }
 
+// CountActiveByUserID mocks base method.
+func (m *MockRefreshTokenRepository) CountActiveByUserID(ctx context.Context, userID uuid.UUID, now time.Time) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountActiveByUserID", ctx, userID, now)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountActiveByUserID indicates an expected call of CountActiveByUserID.
+func (mr *MockRefreshTokenRepositoryMockRecorder) CountActiveByUserID(ctx, userID, now any) *MockRefreshTokenRepositoryCountActiveByUserIDCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountActiveByUserID", reflect.TypeOf((*MockRefreshTokenRepository)(nil).CountActiveByUserID), ctx, userID, now)
+	return &MockRefreshTokenRepositoryCountActiveByUserIDCall{Call: call}
+}
+
+// MockRefreshTokenRepositoryCountActiveByUserIDCall wrap *gomock.Call
+type MockRefreshTokenRepositoryCountActiveByUserIDCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockRefreshTokenRepositoryCountActiveByUserIDCall) Return(arg0 int64, arg1 error) *MockRefreshTokenRepositoryCountActiveByUserIDCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockRefreshTokenRepositoryCountActiveByUserIDCall) Do(f func(context.Context, uuid.UUID, time.Time) (int64, error)) *MockRefreshTokenRepositoryCountActiveByUserIDCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockRefreshTokenRepositoryCountActiveByUserIDCall) DoAndReturn(f func(context.Context, uuid.UUID, time.Time) (int64, error)) *MockRefreshTokenRepositoryCountActiveByUserIDCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
 // Create mocks base method.
 func (m *MockRefreshTokenRepository) Create(ctx context.Context, token entity.RefreshTokenEntity) error {
 	m.ctrl.T.Helper()
@@ -231,6 +270,45 @@ func (c *MockRefreshTokenRepositoryFindByTokenHashCall) Do(f func(context.Contex
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
 func (c *MockRefreshTokenRepositoryFindByTokenHashCall) DoAndReturn(f func(context.Context, string) (*entity.RefreshTokenEntity, error)) *MockRefreshTokenRepositoryFindByTokenHashCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// ListActiveByUserID mocks base method.
+func (m *MockRefreshTokenRepository) ListActiveByUserID(ctx context.Context, userID uuid.UUID, now time.Time, limit, offset int) ([]entity.RefreshTokenEntity, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListActiveByUserID", ctx, userID, now, limit, offset)
+	ret0, _ := ret[0].([]entity.RefreshTokenEntity)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListActiveByUserID indicates an expected call of ListActiveByUserID.
+func (mr *MockRefreshTokenRepositoryMockRecorder) ListActiveByUserID(ctx, userID, now, limit, offset any) *MockRefreshTokenRepositoryListActiveByUserIDCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListActiveByUserID", reflect.TypeOf((*MockRefreshTokenRepository)(nil).ListActiveByUserID), ctx, userID, now, limit, offset)
+	return &MockRefreshTokenRepositoryListActiveByUserIDCall{Call: call}
+}
+
+// MockRefreshTokenRepositoryListActiveByUserIDCall wrap *gomock.Call
+type MockRefreshTokenRepositoryListActiveByUserIDCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockRefreshTokenRepositoryListActiveByUserIDCall) Return(arg0 []entity.RefreshTokenEntity, arg1 error) *MockRefreshTokenRepositoryListActiveByUserIDCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockRefreshTokenRepositoryListActiveByUserIDCall) Do(f func(context.Context, uuid.UUID, time.Time, int, int) ([]entity.RefreshTokenEntity, error)) *MockRefreshTokenRepositoryListActiveByUserIDCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockRefreshTokenRepositoryListActiveByUserIDCall) DoAndReturn(f func(context.Context, uuid.UUID, time.Time, int, int) ([]entity.RefreshTokenEntity, error)) *MockRefreshTokenRepositoryListActiveByUserIDCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

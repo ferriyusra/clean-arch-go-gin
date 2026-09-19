@@ -44,6 +44,83 @@ func (m *MockUserService) EXPECT() *MockUserServiceMockRecorder {
 	return m.recorder
 }
 
+// ChangePassword mocks base method.
+func (m *MockUserService) ChangePassword(ctx context.Context, userID uuid.UUID, req *request.ChangePasswordRequest) (*response.ChangePasswordResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ChangePassword", ctx, userID, req)
+	ret0, _ := ret[0].(*response.ChangePasswordResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ChangePassword indicates an expected call of ChangePassword.
+func (mr *MockUserServiceMockRecorder) ChangePassword(ctx, userID, req any) *MockUserServiceChangePasswordCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ChangePassword", reflect.TypeOf((*MockUserService)(nil).ChangePassword), ctx, userID, req)
+	return &MockUserServiceChangePasswordCall{Call: call}
+}
+
+// MockUserServiceChangePasswordCall wrap *gomock.Call
+type MockUserServiceChangePasswordCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockUserServiceChangePasswordCall) Return(arg0 *response.ChangePasswordResponse, arg1 error) *MockUserServiceChangePasswordCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockUserServiceChangePasswordCall) Do(f func(context.Context, uuid.UUID, *request.ChangePasswordRequest) (*response.ChangePasswordResponse, error)) *MockUserServiceChangePasswordCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockUserServiceChangePasswordCall) DoAndReturn(f func(context.Context, uuid.UUID, *request.ChangePasswordRequest) (*response.ChangePasswordResponse, error)) *MockUserServiceChangePasswordCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// DeleteAccount mocks base method.
+func (m *MockUserService) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteAccount", ctx, userID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteAccount indicates an expected call of DeleteAccount.
+func (mr *MockUserServiceMockRecorder) DeleteAccount(ctx, userID any) *MockUserServiceDeleteAccountCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAccount", reflect.TypeOf((*MockUserService)(nil).DeleteAccount), ctx, userID)
+	return &MockUserServiceDeleteAccountCall{Call: call}
+}
+
+// MockUserServiceDeleteAccountCall wrap *gomock.Call
+type MockUserServiceDeleteAccountCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockUserServiceDeleteAccountCall) Return(arg0 error) *MockUserServiceDeleteAccountCall {
+	c.Call = c.Call.Return(arg0)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockUserServiceDeleteAccountCall) Do(f func(context.Context, uuid.UUID) error) *MockUserServiceDeleteAccountCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockUserServiceDeleteAccountCall) DoAndReturn(f func(context.Context, uuid.UUID) error) *MockUserServiceDeleteAccountCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
 // GetUser mocks base method.
 func (m *MockUserService) GetUser(ctx context.Context, userID string) (*response.GetUser, error) {
 	m.ctrl.T.Helper()
@@ -79,6 +156,45 @@ func (c *MockUserServiceGetUserCall) Do(f func(context.Context, string) (*respon
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
 func (c *MockUserServiceGetUserCall) DoAndReturn(f func(context.Context, string) (*response.GetUser, error)) *MockUserServiceGetUserCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// ListSessions mocks base method.
+func (m *MockUserService) ListSessions(ctx context.Context, userID uuid.UUID, currentRefreshToken string, page request.Pagination) (*response.SessionList, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListSessions", ctx, userID, currentRefreshToken, page)
+	ret0, _ := ret[0].(*response.SessionList)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListSessions indicates an expected call of ListSessions.
+func (mr *MockUserServiceMockRecorder) ListSessions(ctx, userID, currentRefreshToken, page any) *MockUserServiceListSessionsCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSessions", reflect.TypeOf((*MockUserService)(nil).ListSessions), ctx, userID, currentRefreshToken, page)
+	return &MockUserServiceListSessionsCall{Call: call}
+}
+
+// MockUserServiceListSessionsCall wrap *gomock.Call
+type MockUserServiceListSessionsCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockUserServiceListSessionsCall) Return(arg0 *response.SessionList, arg1 error) *MockUserServiceListSessionsCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockUserServiceListSessionsCall) Do(f func(context.Context, uuid.UUID, string, request.Pagination) (*response.SessionList, error)) *MockUserServiceListSessionsCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockUserServiceListSessionsCall) DoAndReturn(f func(context.Context, uuid.UUID, string, request.Pagination) (*response.SessionList, error)) *MockUserServiceListSessionsCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

@@ -30,6 +30,9 @@ func responseTypes() []any {
 		GetCounter{},
 		GetMessage{},
 		CommonIDResponse{},
+		Session{},
+		SessionList{},
+		ChangePasswordResponse{},
 	}
 }
 
@@ -37,9 +40,13 @@ func responseTypes() []any {
 // snake_case key forces every client to special-case it, and the mistake is
 // invisible in review because the Go field name looks fine either way.
 func TestResponseFieldsAreCamelCase(t *testing.T) {
+	t.Parallel()
+
 	for _, target := range responseTypes() {
 		typ := reflect.TypeOf(target)
 		t.Run(typ.Name(), func(t *testing.T) {
+			t.Parallel()
+
 			assertCamelCaseFields(t, typ)
 		})
 	}

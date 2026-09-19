@@ -17,6 +17,16 @@ import (
 type RefreshTokenRepository interface {
 	Create(ctx context.Context, token entity.RefreshTokenEntity) error
 	FindByTokenHash(ctx context.Context, tokenHash string) (*entity.RefreshTokenEntity, error)
+	// ListActiveByUserID returns the user's unexpired tokens, newest first,
+	// windowed by limit and offset.
+	//
+	// "Active" is relative to the instant the caller passes rather than to the
+	// database's clock, so the service keeps a single, swappable notion of now
+	// and a row that expired a second ago is not reported as a live session.
+	ListActiveByUserID(ctx context.Context, userID uuid.UUID, now time.Time, limit, offset int) ([]entity.RefreshTokenEntity, error)
+	// CountActiveByUserID counts the same rows ListActiveByUserID would return
+	// without its window, which is what a pagination total means.
+	CountActiveByUserID(ctx context.Context, userID uuid.UUID, now time.Time) (int64, error)
 	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
 	DeleteByTokenHash(ctx context.Context, tokenHash string) error
 	// DeleteExpired removes every token that expired before the given instant

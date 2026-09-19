@@ -1,6 +1,6 @@
 package request
 
-// RegisterUserRequest is the payload for POST /api/auth/register.
+// RegisterUserRequest is the payload for POST /api/v1/auth/register.
 //
 // Validation is declarative so that every rule is visible in one place and the
 // handler stays free of hand-rolled checks. The password max of 72 is not
@@ -12,7 +12,7 @@ type RegisterUserRequest struct {
 	Name     string `json:"name"     binding:"required,min=1,max=100"`
 }
 
-// LoginRequest is the payload for POST /api/auth/login.
+// LoginRequest is the payload for POST /api/v1/auth/login.
 //
 // Login deliberately validates only presence: rejecting a malformed password
 // here would tell an attacker which stored passwords cannot exist.
