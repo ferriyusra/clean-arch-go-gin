@@ -153,3 +153,30 @@ func TestGenerateRefreshTokenIssuer(t *testing.T) {
 		t.Errorf("expected issuer 'go-vite-react', got %s", claims.Issuer)
 	}
 }
+
+// TestGenerateRefreshTokenIsUniquePerCall is a regression test for a bug that
+// silently disabled rotation: without a random JWT ID, two tokens minted for
+// the same user inside the same second are byte-identical, so "rotating" a
+// refresh token handed back the very token it was replacing.
+func TestGenerateRefreshTokenIsUniquePerCall(t *testing.T) {
+	service := NewTokenService(TokenConfig{
+		RefreshTokenSecret: "test-refresh-secret",
+		RefreshTokenExpiry: 7 * 24 * time.Hour,
+	})
+
+	userID := uuid.New()
+	seen := make(map[string]bool, 100)
+
+	// Deliberately in a tight loop so every call lands in the same second,
+	// which is exactly the condition the bug needed.
+	for i := 0; i < 100; i++ {
+		tokenStr, err := service.GenerateRefreshToken(userID)
+		if err != nil {
+			t.Fatalf("generating token %d: %v", i, err)
+		}
+		if seen[tokenStr] {
+			t.Fatalf("duplicate refresh token on iteration %d", i)
+		}
+		seen[tokenStr] = true
+	}
+}
