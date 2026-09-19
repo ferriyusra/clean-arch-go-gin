@@ -23,6 +23,7 @@ import (
 	counterRepo "github.com/ferriyusra/clean-arch-go-gin/internal/repository/implementations/counter"
 	messageRepo "github.com/ferriyusra/clean-arch-go-gin/internal/repository/implementations/message"
 	refreshTokenRepo "github.com/ferriyusra/clean-arch-go-gin/internal/repository/implementations/refresh_token"
+	txRepo "github.com/ferriyusra/clean-arch-go-gin/internal/repository/implementations/tx"
 	userRepo "github.com/ferriyusra/clean-arch-go-gin/internal/repository/implementations/user"
 
 	counterSvc "github.com/ferriyusra/clean-arch-go-gin/internal/service/counter"
@@ -127,8 +128,12 @@ func NewContainer(cfg *platform.Config, logger *slog.Logger) (*Container, error)
 		ownsDB = true
 	}
 
-	if err := platform.Migrate(db); err != nil {
-		return nil, fmt.Errorf("migrating database: %w", err)
+	if cfg.Database.AutoMigrate {
+		if err := platform.Migrate(db); err != nil {
+			return nil, fmt.Errorf("migrating database: %w", err)
+		}
+	} else {
+		logger.Info("startup migrations are disabled; run them as a separate step")
 	}
 
 	// Repositories
@@ -136,6 +141,7 @@ func NewContainer(cfg *platform.Config, logger *slog.Logger) (*Container, error)
 	messageRepository := messageRepo.NewGORMMessageRepository(db)
 	userRepository := userRepo.NewGORMUserRepository(db)
 	refreshTokenRepository := refreshTokenRepo.NewGORMRefreshTokenRepository(db)
+	txManager := txRepo.NewGORMTxManager(db)
 
 	// Services
 	tokenService := tokenSvc.NewTokenService(tokenSvc.TokenConfig{
@@ -153,6 +159,7 @@ func NewContainer(cfg *platform.Config, logger *slog.Logger) (*Container, error)
 			userRepository,
 			refreshTokenRepository,
 			tokenService,
+			txManager,
 			cfg.Auth.RefreshTokenTTL,
 		),
 		Token: tokenService,
@@ -174,7 +181,8 @@ func NewContainer(cfg *platform.Config, logger *slog.Logger) (*Container, error)
 	}
 
 	router := newRouter(cfg, logger)
-	api.SetupRoutes(router, handlers.Message, handlers.Counter, handlers.User, services.Token, services.CSRF)
+	api.SetupRoutes(router, handlers.Message, handlers.Counter, handlers.User,
+		services.Token, services.CSRF, authRateLimiter(cfg))
 	api.SetupHealthRoutes(router, handlers.Health)
 	api.SetupFallbacks(router)
 
@@ -236,10 +244,10 @@ func newRouter(cfg *platform.Config, logger *slog.Logger) *gin.Engine {
 	r.Use(middleware.BodyLimit(cfg.Security.MaxRequestBody))
 
 	if cfg.Security.RateLimitEnabled {
-		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
+		r.Use(middleware.RateLimit(middleware.NewIPRateLimiter(middleware.RateLimitConfig{
 			RPS:   cfg.Security.RateLimitRPS,
 			Burst: cfg.Security.RateLimitBurst,
-		}))
+		})))
 	}
 
 	r.Use(middleware.Timeout(cfg.Server.RequestTimeout))
@@ -330,4 +338,21 @@ func (c *Container) purgeExpiredRefreshTokens(ctx context.Context) {
 	if removed > 0 {
 		c.Logger.Info("swept expired refresh tokens", "removed", removed)
 	}
+}
+
+// authRateLimiter builds the throttle for the credential endpoints.
+//
+// It is a separate limiter from the global one, with its own budget, so that
+// normal API traffic cannot use up the allowance that is meant to make password
+// guessing slow. When rate limiting is switched off entirely, this becomes a
+// pass-through rather than a second policy that quietly stays on.
+func authRateLimiter(cfg *platform.Config) gin.HandlerFunc {
+	if !cfg.Security.RateLimitEnabled {
+		return func(c *gin.Context) { c.Next() }
+	}
+
+	return middleware.RateLimit(middleware.NewIPRateLimiter(middleware.RateLimitConfig{
+		RPS:   cfg.Security.AuthRateLimitRPS,
+		Burst: cfg.Security.AuthRateLimitBurst,
+	}))
 }

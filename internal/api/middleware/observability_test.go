@@ -154,7 +154,7 @@ func TestSecurityHeaders(t *testing.T) {
 
 func TestRateLimitRejectsOnceTheBurstIsSpent(t *testing.T) {
 	r := testutil.NewEngine(t)
-	r.Use(middleware.RateLimit(middleware.RateLimitConfig{RPS: 0.0001, Burst: 2}))
+	r.Use(middleware.RateLimit(middleware.NewIPRateLimiter(middleware.RateLimitConfig{RPS: 0.0001, Burst: 2})))
 	r.GET("/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{}) })
 
 	// The bucket starts full, so exactly Burst requests succeed.
@@ -244,4 +244,68 @@ func TestRequestIDRejectsUntrustworthyClientValues(t *testing.T) {
 			testutil.Equal(t, len(got), 36, "a fresh uuid is issued instead")
 		})
 	}
+}
+
+// stubLimiter records what it was asked about and answers from a script, so a
+// test can check the middleware rather than the bucket arithmetic.
+type stubLimiter struct {
+	allow bool
+	keys  []string
+}
+
+func (s *stubLimiter) Allow(key string) bool {
+	s.keys = append(s.keys, key)
+	return s.allow
+}
+
+// TestRateLimitIsPluggable pins the seam that lets a shared limiter replace the
+// in-process one once there is more than one replica.
+func TestRateLimitIsPluggable(t *testing.T) {
+	tests := []struct {
+		name       string
+		allow      bool
+		wantStatus int
+	}{
+		{name: "a limiter that allows lets the request through", allow: true, wantStatus: http.StatusOK},
+		{name: "a limiter that refuses returns 429", wantStatus: http.StatusTooManyRequests},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			limiter := &stubLimiter{allow: tt.allow}
+
+			r := testutil.NewEngine(t)
+			r.Use(middleware.RateLimit(limiter))
+			r.GET("/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{}) })
+
+			rec := testutil.Do(r, testutil.JSONRequest(t, http.MethodGet, "/ping", nil))
+
+			testutil.Equal(t, rec.Code, tt.wantStatus, "status")
+			testutil.Equal(t, len(limiter.keys), 1, "the limiter was consulted once")
+			testutil.True(t, limiter.keys[0] != "", "it was given a client key")
+		})
+	}
+}
+
+// Separate limiters must not share a budget, which is the whole point of giving
+// the auth endpoints their own.
+func TestRateLimitBudgetsAreIndependent(t *testing.T) {
+	global := middleware.NewIPRateLimiter(middleware.RateLimitConfig{RPS: 0.0001, Burst: 1})
+	auth := middleware.NewIPRateLimiter(middleware.RateLimitConfig{RPS: 0.0001, Burst: 1})
+
+	r := testutil.NewEngine(t)
+	r.GET("/public", middleware.RateLimit(global), func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{}) })
+	r.POST("/login", middleware.RateLimit(auth), func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{}) })
+
+	// Spend the public budget entirely.
+	testutil.Equal(t, testutil.Do(r, testutil.JSONRequest(t, http.MethodGet, "/public", nil)).Code,
+		http.StatusOK, "first public request")
+	testutil.Equal(t, testutil.Do(r, testutil.JSONRequest(t, http.MethodGet, "/public", nil)).Code,
+		http.StatusTooManyRequests, "second public request")
+
+	// The auth endpoint still has its own.
+	testutil.Equal(t, testutil.Do(r, testutil.JSONRequest(t, http.MethodPost, "/login", nil)).Code,
+		http.StatusOK, "first login attempt")
+	testutil.Equal(t, testutil.Do(r, testutil.JSONRequest(t, http.MethodPost, "/login", nil)).Code,
+		http.StatusTooManyRequests, "second login attempt")
 }

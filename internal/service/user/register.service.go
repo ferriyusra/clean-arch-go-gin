@@ -44,18 +44,26 @@ func (s *userService) Register(ctx context.Context, req *request.RegisterUserReq
 		Name:     req.Name,
 	}
 
-	// Save to repository
-	if _, err = s.userRepository.Create(ctx, userEntity); err != nil {
-		return nil, apperr.Internal(fmt.Errorf("creating user: %w", err))
-	}
-
 	user := response.GetUser{
 		ID:    userEntity.ID,
 		Email: userEntity.Email,
 		Name:  userEntity.Name,
 	}
 
-	accessToken, refreshToken, err := s.issueTokens(ctx, user)
+	// The account row and its first refresh token are written together.
+	// Without the transaction, a failure while storing the token left an
+	// account that exists but has no session, whose email is already taken by
+	// the unique index, so the owner could neither sign in nor register again.
+	var accessToken, refreshToken string
+	err = s.txManager.WithinTx(ctx, func(ctx context.Context) error {
+		if _, createErr := s.userRepository.Create(ctx, userEntity); createErr != nil {
+			return apperr.Internal(fmt.Errorf("creating user: %w", createErr))
+		}
+
+		var issueErr error
+		accessToken, refreshToken, issueErr = s.issueTokens(ctx, user)
+		return issueErr
+	})
 	if err != nil {
 		return nil, err
 	}

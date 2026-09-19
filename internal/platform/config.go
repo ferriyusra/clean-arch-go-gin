@@ -55,6 +55,10 @@ type DatabaseConfig struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	LogLevel        string
+	// AutoMigrate runs pending migrations at startup. Switch it off in
+	// production and run them as their own step, so that several replicas
+	// starting at once do not race each other.
+	AutoMigrate bool
 }
 
 // RedisConfig holds Redis connection configuration
@@ -91,8 +95,12 @@ type SecurityConfig struct {
 	RateLimitEnabled bool
 	RateLimitRPS     float64
 	RateLimitBurst   int
-	MaxRequestBody   int64
-	TrustedProxies   []string
+	// Auth* applies to the credential endpoints, which need a far tighter
+	// budget than the rest of the API: those are the ones worth guessing at.
+	AuthRateLimitRPS   float64
+	AuthRateLimitBurst int
+	MaxRequestBody     int64
+	TrustedProxies     []string
 }
 
 // NewConfig loads configuration from environment variables.
@@ -120,6 +128,7 @@ func NewConfig() *Config {
 			MaxIdleConns:    getEnvInt("DATABASE_MAX_IDLE_CONNS", 5),
 			ConnMaxLifetime: getEnvDuration("DATABASE_CONN_MAX_LIFETIME", 5*time.Minute),
 			LogLevel:        getEnv("DATABASE_LOG_LEVEL", defaultDatabaseLogLevel(devMode)),
+			AutoMigrate:     getEnvBool("DATABASE_AUTO_MIGRATE", true),
 		},
 		Redis: RedisConfig{
 			Host:     getEnv("REDIS_HOST", "localhost"),
@@ -143,11 +152,13 @@ func NewConfig() *Config {
 			Format: strings.ToLower(getEnv("LOG_FORMAT", defaultLogFormat(devMode))),
 		},
 		Security: SecurityConfig{
-			RateLimitEnabled: getEnvBool("RATE_LIMIT_ENABLED", true),
-			RateLimitRPS:     getEnvFloat("RATE_LIMIT_RPS", 20),
-			RateLimitBurst:   getEnvInt("RATE_LIMIT_BURST", 40),
-			MaxRequestBody:   int64(getEnvInt("MAX_REQUEST_BODY_BYTES", 1<<20)),
-			TrustedProxies:   parseCSVEnv("TRUSTED_PROXIES", ""),
+			RateLimitEnabled:   getEnvBool("RATE_LIMIT_ENABLED", true),
+			RateLimitRPS:       getEnvFloat("RATE_LIMIT_RPS", 20),
+			RateLimitBurst:     getEnvInt("RATE_LIMIT_BURST", 40),
+			AuthRateLimitRPS:   getEnvFloat("AUTH_RATE_LIMIT_RPS", 0.2),
+			AuthRateLimitBurst: getEnvInt("AUTH_RATE_LIMIT_BURST", 5),
+			MaxRequestBody:     int64(getEnvInt("MAX_REQUEST_BODY_BYTES", 1<<20)),
+			TrustedProxies:     parseCSVEnv("TRUSTED_PROXIES", ""),
 		},
 		Tracing: TracingConfig{
 			Enabled:        getEnvBool("OTEL_ENABLED", false),

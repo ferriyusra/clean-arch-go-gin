@@ -345,3 +345,41 @@ func refreshRequest(t *testing.T, refreshToken, csrf string) *http.Request {
 	req.Header.Set("X-CSRF-Token", csrf)
 	return req
 }
+
+// TestAuthEndpointsHaveTheirOwnRateLimit checks the route wiring, which the
+// middleware tests cannot see: that the tighter limiter is actually attached to
+// the credential endpoints and not to everything else.
+func TestAuthEndpointsHaveTheirOwnRateLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Setenv("DEV_MODE", "true")
+	cfg := platform.NewConfig()
+	cfg.Database.Gorm = testutil.NewDB(t)
+	cfg.Security.RateLimitEnabled = true
+	// Generous globally, almost nothing for credentials.
+	cfg.Security.RateLimitRPS = 1000
+	cfg.Security.RateLimitBurst = 1000
+	cfg.Security.AuthRateLimitRPS = 0.0001
+	cfg.Security.AuthRateLimitBurst = 2
+
+	container, err := di.NewContainer(cfg, nil)
+	testutil.NoError(t, err)
+	t.Cleanup(func() { _ = container.Close() })
+
+	credentials := map[string]string{"email": "throttled@example.com", "password": "password123"}
+
+	// The burst is spent on the first two attempts, whatever they answer.
+	for i := 0; i < 2; i++ {
+		rec := testutil.Do(container.Router,
+			testutil.JSONRequest(t, http.MethodPost, "/api/auth/login", credentials))
+		testutil.True(t, rec.Code != http.StatusTooManyRequests, "an attempt within the burst")
+	}
+
+	throttled := testutil.Do(container.Router,
+		testutil.JSONRequest(t, http.MethodPost, "/api/auth/login", credentials))
+	testutil.Equal(t, throttled.Code, http.StatusTooManyRequests, "the attempt past the burst")
+
+	// Ordinary traffic is untouched: the two limiters keep separate budgets.
+	public := testutil.Do(container.Router, testutil.JSONRequest(t, http.MethodGet, "/api/message", nil))
+	testutil.Equal(t, public.Code, http.StatusOK, "a public endpoint after the auth limit is hit")
+}

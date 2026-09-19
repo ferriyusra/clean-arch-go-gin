@@ -34,6 +34,7 @@ type userService struct {
 	userRepository         interfaces.UserRepository
 	refreshTokenRepository interfaces.RefreshTokenRepository
 	tokenService           token.TokenService
+	txManager              interfaces.TxManager
 	refreshTokenTTL        time.Duration
 	// now is swappable so tests can reason about expiry without sleeping.
 	now func() time.Time
@@ -47,12 +48,14 @@ func NewUserService(
 	userRepository interfaces.UserRepository,
 	refreshTokenRepository interfaces.RefreshTokenRepository,
 	tokenService token.TokenService,
+	txManager interfaces.TxManager,
 	refreshTokenTTL time.Duration,
 ) UserService {
 	return &userService{
 		userRepository:         userRepository,
 		refreshTokenRepository: refreshTokenRepository,
 		tokenService:           tokenService,
+		txManager:              txManager,
 		refreshTokenTTL:        refreshTokenTTL,
 		now:                    time.Now,
 	}

@@ -54,17 +54,22 @@ func (s *userService) Refresh(ctx context.Context, refreshToken string) (*respon
 		return nil, apperr.ErrRefreshTokenExpired
 	}
 
-	// Rotate. The old token is invalidated before the new one is issued, so a
-	// crash in between costs the user a re-login rather than leaving two live
-	// tokens for one session.
-	if err := s.refreshTokenRepository.DeleteByTokenHash(ctx, tokenHash); err != nil {
-		return nil, apperr.Internal(fmt.Errorf("rotating refresh token: %w", err))
-	}
+	// Rotate inside a transaction: retiring the old token and issuing the new
+	// one is a single change of state. Half of it would either leave two live
+	// tokens for one session, or none at all.
+	var accessToken, newRefreshToken string
+	err = s.txManager.WithinTx(ctx, func(ctx context.Context) error {
+		if delErr := s.refreshTokenRepository.DeleteByTokenHash(ctx, tokenHash); delErr != nil {
+			return apperr.Internal(fmt.Errorf("rotating refresh token: %w", delErr))
+		}
 
-	accessToken, newRefreshToken, err := s.issueTokens(ctx, response.GetUser{
-		ID:    claims.UserID,
-		Email: claims.Email,
-		Name:  claims.Name,
+		var issueErr error
+		accessToken, newRefreshToken, issueErr = s.issueTokens(ctx, response.GetUser{
+			ID:    claims.UserID,
+			Email: claims.Email,
+			Name:  claims.Name,
+		})
+		return issueErr
 	})
 	if err != nil {
 		return nil, err

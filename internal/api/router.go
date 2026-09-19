@@ -23,6 +23,9 @@ func SetupRoutes(
 	userHandler *handler.UserHandler,
 	tokenService token.TokenService,
 	csrfService csrf.CSRFService,
+	// authLimiter guards the credential endpoints. It is passed in rather than
+	// built here so the policy stays with the rest of the configuration.
+	authLimiter gin.HandlerFunc,
 ) {
 	api := r.Group("/api")
 
@@ -30,9 +33,11 @@ func SetupRoutes(
 	api.GET("/message", messageHandler.GetMessage)
 
 	// Auth routes (public)
-	api.POST("/auth/register", userHandler.Register)
-	api.POST("/auth/login", userHandler.Login)
-	api.POST("/auth/refresh", middleware.CSRFMiddleware(csrfService), userHandler.Refresh)
+	// Credential endpoints carry their own, much tighter budget: a global limit
+	// generous enough for normal browsing is generous enough to guess passwords.
+	api.POST("/auth/register", authLimiter, userHandler.Register)
+	api.POST("/auth/login", authLimiter, userHandler.Login)
+	api.POST("/auth/refresh", authLimiter, middleware.CSRFMiddleware(csrfService), userHandler.Refresh)
 	api.GET("/csrf", userHandler.GetCSRFToken)
 
 	// Protected routes (require authentication)

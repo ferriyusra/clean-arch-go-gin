@@ -42,7 +42,7 @@ func newTestDeps(t *testing.T) *testDeps {
 		users:         users,
 		refreshTokens: refreshTokens,
 		tokens:        tokens,
-		service:       NewUserService(users, refreshTokens, tokens, testRefreshTTL),
+		service:       NewUserService(users, refreshTokens, tokens, testutil.PassthroughTx{}, testRefreshTTL),
 	}
 }
 
