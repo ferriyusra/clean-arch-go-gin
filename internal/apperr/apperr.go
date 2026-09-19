@@ -20,9 +20,14 @@ const (
 	CodeForbidden    Code = "FORBIDDEN"
 	CodeNotFound     Code = "NOT_FOUND"
 	CodeConflict     Code = "CONFLICT"
-	CodeTimeout      Code = "TIMEOUT"
-	CodeUnavailable  Code = "UNAVAILABLE"
-	CodeInternal     Code = "INTERNAL"
+	// CodeTooManyRequests is throttling, which is not the same thing as
+	// forbidden: 403 tells a client the request will never be allowed, so a
+	// well-behaved one stops retrying, while 429 says try again later and is
+	// the code Retry-After belongs with.
+	CodeTooManyRequests Code = "TOO_MANY_REQUESTS"
+	CodeTimeout         Code = "TIMEOUT"
+	CodeUnavailable     Code = "UNAVAILABLE"
+	CodeInternal        Code = "INTERNAL"
 )
 
 // Error carries a client-safe message plus an optional internal cause.
@@ -166,6 +171,8 @@ func statusForCode(c Code) int {
 		return http.StatusNotFound
 	case CodeConflict:
 		return http.StatusConflict
+	case CodeTooManyRequests:
+		return http.StatusTooManyRequests
 	case CodeTimeout:
 		return http.StatusGatewayTimeout
 	case CodeUnavailable:

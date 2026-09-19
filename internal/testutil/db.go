@@ -35,6 +35,9 @@ func NewDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		// Silent keeps `go test -v` readable; flip to logger.Info to debug SQL.
 		Logger: logger.Default.LogMode(logger.Silent),
+		// Matches the production configuration in platform.InitializeDatabase;
+		// without it a test could not observe the duplicate-key mapping at all.
+		TranslateError: true,
 	})
 	if err != nil {
 		t.Fatalf("opening test database: %v", err)

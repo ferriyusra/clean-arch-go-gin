@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/ferriyusra/clean-arch-go-gin/internal/api/middleware"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/service/health"
 )
@@ -55,11 +56,16 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 	}
 
 	if status.Status != "ok" {
+		// This 503 is written directly rather than through Fail, because the
+		// body carries the per-dependency detail an operator needs and Fail
+		// deliberately reduces an error to a message. It still gets the
+		// correlation ids: a failing readiness probe is exactly when someone
+		// wants to find the matching log line and trace.
 		c.AbortWithStatusJSON(http.StatusServiceUnavailable, response.APIResponse{
 			Success: false,
 			Message: status.Message,
 			Data:    status,
-		})
+		}.WithCorrelation(middleware.GetRequestID(c), middleware.GetTraceID(c)))
 		return
 	}
 

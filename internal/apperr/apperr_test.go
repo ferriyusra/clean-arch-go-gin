@@ -13,6 +13,8 @@ import (
 )
 
 func TestHTTPStatusMapping(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		err  error
@@ -23,6 +25,10 @@ func TestHTTPStatusMapping(t *testing.T) {
 		{"forbidden", apperr.ErrInvalidCSRFToken, http.StatusForbidden},
 		{"not found", apperr.ErrUserNotFound, http.StatusNotFound},
 		{"conflict", apperr.ErrUserAlreadyExists, http.StatusConflict},
+		// Throttling is 429, not 403. A 403 tells a client the request will
+		// never be allowed and a well-behaved one stops retrying; a rate limit
+		// is the opposite message.
+		{"too many requests", apperr.ErrRateLimit, http.StatusTooManyRequests},
 		{"unavailable", apperr.ErrUnhealthy, http.StatusServiceUnavailable},
 		{"internal", apperr.ErrInternal, http.StatusInternalServerError},
 		// An error from outside this package is treated as internal, which is
@@ -34,6 +40,8 @@ func TestHTTPStatusMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			testutil.Equal(t, apperr.HTTPStatus(tt.err), tt.want, "status")
 		})
 	}
@@ -42,6 +50,8 @@ func TestHTTPStatusMapping(t *testing.T) {
 // TestDerivedErrorsStillMatchTheirSentinel is the property the whole design
 // rests on: wrapping a cause must not break errors.Is at the call site.
 func TestDerivedErrorsStillMatchTheirSentinel(t *testing.T) {
+	t.Parallel()
+
 	cause := errors.New("connection refused")
 
 	withCause := apperr.ErrUserNotFound.WithCause(cause)
@@ -60,6 +70,8 @@ func TestDerivedErrorsStillMatchTheirSentinel(t *testing.T) {
 // TestDerivingDoesNotMutateTheSentinel guards against one request's error
 // detail bleeding into another's, since the sentinels are package-level values.
 func TestDerivingDoesNotMutateTheSentinel(t *testing.T) {
+	t.Parallel()
+
 	_ = apperr.ErrValidation.WithFields(map[string]string{"email": "required"})
 	_ = apperr.ErrUserNotFound.WithCause(errors.New("boom"))
 
@@ -72,6 +84,8 @@ func TestDerivingDoesNotMutateTheSentinel(t *testing.T) {
 // TestClientMessageHidesInternalDetail is the guarantee that motivated this
 // package: a wrapped driver error must never reach a client.
 func TestClientMessageHidesInternalDetail(t *testing.T) {
+	t.Parallel()
+
 	err := apperr.Internal(fmt.Errorf("finding user by email: %w",
 		errors.New("dial tcp 10.0.0.5:5432: connection refused")))
 
@@ -85,6 +99,8 @@ func TestClientMessageHidesInternalDetail(t *testing.T) {
 }
 
 func TestClientMessagePassesThroughKnownErrors(t *testing.T) {
+	t.Parallel()
+
 	testutil.Equal(t, apperr.ClientMessage(apperr.ErrInvalidCredentials),
 		"Invalid email or password", "sentinel message reaches the client")
 	testutil.Equal(t, apperr.ClientMessage(errors.New("raw")),
@@ -92,6 +108,8 @@ func TestClientMessagePassesThroughKnownErrors(t *testing.T) {
 }
 
 func TestFieldsAreCarriedThroughTheChain(t *testing.T) {
+	t.Parallel()
+
 	err := apperr.ErrValidation.
 		WithFields(map[string]string{"email": "Must be a valid email address"}).
 		WithCause(errors.New("binding failed"))
@@ -102,6 +120,8 @@ func TestFieldsAreCarriedThroughTheChain(t *testing.T) {
 }
 
 func TestFromExtractsTheApplicationError(t *testing.T) {
+	t.Parallel()
+
 	wrapped := fmt.Errorf("layer above: %w", apperr.ErrUserNotFound)
 
 	appErr, ok := apperr.From(wrapped)
@@ -110,5 +130,92 @@ func TestFromExtractsTheApplicationError(t *testing.T) {
 
 	if _, ok := apperr.From(errors.New("plain")); ok {
 		t.Errorf("a plain error must not be reported as an *apperr.Error")
+	}
+}
+
+// benchCase is one of the three shapes an error arrives in at the HTTP layer.
+type benchCase struct {
+	name string
+	err  error
+}
+
+// benchErrorCases covers the bare sentinel, the same sentinel buried under the
+// fmt.Errorf wrapping it picks up crossing repository, service and handler, and
+// an error from outside this package. The depth is the interesting variable:
+// HTTPStatus, ClientMessage and From all walk the chain with errors.As, so a
+// deeper wrap is strictly more work on every error response.
+func benchErrorCases() []benchCase {
+	return []benchCase{
+		{name: "bare sentinel", err: apperr.ErrUserNotFound},
+		{name: "sentinel wrapped three deep", err: fmt.Errorf("handler: %w",
+			fmt.Errorf("service: %w",
+				fmt.Errorf("repository: %w", apperr.ErrUserNotFound)))},
+		{name: "plain error", err: errors.New("dial tcp 10.0.0.5:5432: connection refused")},
+	}
+}
+
+// Sinks for the benchmark results, so the compiler cannot delete the work.
+var (
+	benchStatus  int
+	benchMessage string
+	benchErr     *apperr.Error
+	benchOK      bool
+)
+
+// BenchmarkHTTPStatus measures the status lookup every error response performs.
+func BenchmarkHTTPStatus(b *testing.B) {
+	for _, bc := range benchErrorCases() {
+		b.Run(bc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				benchStatus = apperr.HTTPStatus(bc.err)
+			}
+		})
+	}
+}
+
+// BenchmarkClientMessage measures producing the message the client actually
+// sees, which is a second walk down the same chain.
+func BenchmarkClientMessage(b *testing.B) {
+	for _, bc := range benchErrorCases() {
+		b.Run(bc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				benchMessage = apperr.ClientMessage(bc.err)
+			}
+		})
+	}
+}
+
+// BenchmarkFrom measures the errors.As walk the other two are built on.
+func BenchmarkFrom(b *testing.B) {
+	for _, bc := range benchErrorCases() {
+		b.Run(bc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				benchErr, benchOK = apperr.From(bc.err)
+			}
+		})
+	}
+}
+
+// BenchmarkWithFields measures building a validation error. Every rejected
+// request pays it: the sentinel is cloned and a field map is allocated, which
+// is the one allocation on the 400 path that grows with the payload.
+func BenchmarkWithFields(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		benchErr = apperr.ErrValidation.WithFields(map[string]string{
+			"email":    "Must be a valid email address",
+			"password": "Must be at least 8 characters",
+		})
 	}
 }

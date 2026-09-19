@@ -2,10 +2,12 @@ package user
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
@@ -57,6 +59,13 @@ func (s *userService) Register(ctx context.Context, req *request.RegisterUserReq
 	var accessToken, refreshToken string
 	err = s.txManager.WithinTx(ctx, func(ctx context.Context) error {
 		if _, createErr := s.userRepository.Create(ctx, userEntity); createErr != nil {
+			// The FindByEmail check above cannot see a soft-deleted row, so a
+			// deleted account's address still occupies the unique index and
+			// only the insert discovers it. That is a conflict, not a server
+			// fault, and it is reachable as soon as accounts can be deleted.
+			if errors.Is(createErr, gorm.ErrDuplicatedKey) {
+				return apperr.ErrUserAlreadyExists
+			}
 			return apperr.Internal(fmt.Errorf("creating user: %w", createErr))
 		}
 

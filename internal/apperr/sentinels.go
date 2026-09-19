@@ -12,7 +12,14 @@ var (
 	ErrCanceled   = New(CodeTimeout, "Request was canceled")
 	ErrValidation = New(CodeInvalidInput, "Validation failed")
 	ErrBadRequest = New(CodeInvalidInput, "Invalid request body")
-	ErrRateLimit  = New(CodeForbidden, "Too many requests")
+	// ErrRateLimit is throttling, so it maps to 429 rather than 403. The rate
+	// limit middleware writes its own 429 directly and never routes through
+	// handler.Fail, which is the only reason the earlier CodeForbidden
+	// classification was harmless: nothing exercised it. The first caller to
+	// surface a rate-limit failure through the normal error path would have
+	// emitted a 403, telling clients to stop retrying something that is only
+	// temporarily refused.
+	ErrRateLimit = New(CodeTooManyRequests, "Too many requests")
 
 	// Auth / user
 	ErrInvalidCredentials = New(CodeUnauthorized, "Invalid email or password")

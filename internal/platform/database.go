@@ -44,6 +44,11 @@ func InitializeDatabase(cfg *Config) (*gorm.DB, error) {
 
 	db, err := gorm.Open(dialector, &gorm.Config{
 		Logger: logger.Default.LogMode(gormLogLevel(cfg.Database.LogLevel)),
+		// Without this, a unique-index violation arrives as an unclassified
+		// driver error that no layer can branch on, so a duplicate email surfaces
+		// as a 500 instead of a 409. TranslateError maps it to
+		// gorm.ErrDuplicatedKey, which the service layer can recognise.
+		TranslateError: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect database: %w", err)
