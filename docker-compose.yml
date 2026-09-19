@@ -37,8 +37,15 @@ services:
       ALLOWED_ORIGINS: "http://localhost:5173"
       LOG_FORMAT: json
       LOG_LEVEL: info
+      # Metrics on the admin listener. ADMIN_HOST is 0.0.0.0 here so the port
+      # can be published out of the container; pprof stays off, which is what
+      # lets that non-loopback bind pass validation.
+      METRICS_ENABLED: "true"
+      ADMIN_HOST: "0.0.0.0"
+      ADMIN_PORT: "9090"
     ports:
       - "8080:8080"
+      - "9090:9090"
 
   # Local trace viewer. Start it with: docker compose --profile tracing up
   # Then open http://localhost:16686 and set OTEL_ENABLED=true on the app.

@@ -3,6 +3,7 @@ package platform
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ func (c *Config) Validate() error {
 	problems = append(problems, c.validateAuth()...)
 	problems = append(problems, c.validateLog()...)
 	problems = append(problems, c.validateTracing()...)
+	problems = append(problems, c.validateObservability()...)
 	problems = append(problems, c.validateTokenLifetimes()...)
 
 	if len(problems) == 0 {
@@ -45,7 +47,7 @@ func (c *Config) validateParsing() []string {
 
 	intVars := []string{
 		"SERVER_PORT", "DATABASE_MAX_OPEN_CONNS", "DATABASE_MAX_IDLE_CONNS",
-		"REDIS_PORT", "REDIS_DB", "RATE_LIMIT_BURST", "MAX_REQUEST_BODY_BYTES",
+		"RATE_LIMIT_BURST", "MAX_REQUEST_BODY_BYTES", "ADMIN_PORT",
 	}
 	for _, key := range intVars {
 		if raw := os.Getenv(key); raw != "" {
@@ -238,4 +240,60 @@ func (c *Config) validateTokenLifetimes() []string {
 	}
 
 	return problems
+}
+
+// validateObservability guards the admin listener that serves /metrics and
+// /debug/pprof.
+//
+// The pprof rule is the one that matters. pprof is not a read-only window: an
+// unauthenticated caller can dump the heap, which contains whatever the process
+// was holding, and ask for a 30-second CPU profile, which is a denial of
+// service anyone can trigger repeatedly. Binding it to a non-loopback address
+// outside DEV_MODE publishes that to the network, so startup refuses rather
+// than leaving it to be noticed later.
+func (c *Config) validateObservability() []string {
+	var problems []string
+
+	if !c.Observability.MetricsEnabled && !c.Observability.PprofEnabled {
+		return problems
+	}
+
+	if c.Observability.AdminPort < 1 || c.Observability.AdminPort > 65535 {
+		problems = append(problems, fmt.Sprintf(
+			"ADMIN_PORT=%d is outside 1-65535", c.Observability.AdminPort))
+	}
+	if c.Observability.AdminPort == c.Server.Port {
+		problems = append(problems, fmt.Sprintf(
+			"ADMIN_PORT=%d must differ from SERVER_PORT, otherwise the admin "+
+				"endpoints would be served on the public listener",
+			c.Observability.AdminPort))
+	}
+	if c.Observability.AdminHost == "" {
+		problems = append(problems, "ADMIN_HOST must not be empty")
+	}
+
+	if !c.Auth.DevMode && c.Observability.PprofEnabled && !isLoopbackHost(c.Observability.AdminHost) {
+		problems = append(problems, fmt.Sprintf(
+			"PPROF_ENABLED requires a loopback ADMIN_HOST outside DEV_MODE (got %q): "+
+				"pprof lets an unauthenticated caller dump the heap and stall the "+
+				"process with a 30s CPU profile. Bind it to 127.0.0.1 and reach it "+
+				"with a port forward",
+			c.Observability.AdminHost))
+	}
+
+	return problems
+}
+
+// isLoopbackHost reports whether a bare host or IP resolves to the local
+// machine only. It is the host-shaped counterpart of isLoopbackEndpoint, which
+// takes a URL.
+func isLoopbackHost(host string) bool {
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "[::1]":
+		return true
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }

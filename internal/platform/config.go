@@ -13,11 +13,13 @@ import (
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
-	Redis    RedisConfig
 	Auth     AuthConfig
 	Log      LogConfig
 	Security SecurityConfig
 	Tracing  TracingConfig
+	// Observability is the metrics and pprof listener, which is separate from
+	// the public server. See ObservabilityConfig for why.
+	Observability ObservabilityConfig
 }
 
 // AuthConfig holds authentication and security configuration
@@ -61,14 +63,6 @@ type DatabaseConfig struct {
 	AutoMigrate bool
 }
 
-// RedisConfig holds Redis connection configuration
-type RedisConfig struct {
-	Host     string
-	Port     int
-	DB       int
-	Password string
-}
-
 // LogConfig holds structured logging configuration
 type LogConfig struct {
 	Level  string // debug | info | warn | error
@@ -88,6 +82,21 @@ type TracingConfig struct {
 	Endpoint       string
 	Insecure       bool
 	SampleRatio    float64
+}
+
+// ObservabilityConfig holds the metrics and pprof listener configuration.
+//
+// These are served on their own listener rather than on the public router, and
+// AdminHost defaults to loopback rather than every interface, because both
+// endpoints are dangerous to expose: /debug/pprof lets an unauthenticated
+// caller dump the heap and stall the process for a 30-second CPU profile, and
+// /metrics publishes request volumes, route names and process internals.
+// Reaching them is meant to require getting onto the host or forwarding a port.
+type ObservabilityConfig struct {
+	MetricsEnabled bool
+	PprofEnabled   bool
+	AdminHost      string
+	AdminPort      int
 }
 
 // SecurityConfig holds request-level hardening configuration
@@ -130,12 +139,6 @@ func NewConfig() *Config {
 			LogLevel:        getEnv("DATABASE_LOG_LEVEL", defaultDatabaseLogLevel(devMode)),
 			AutoMigrate:     getEnvBool("DATABASE_AUTO_MIGRATE", true),
 		},
-		Redis: RedisConfig{
-			Host:     getEnv("REDIS_HOST", "localhost"),
-			Port:     getEnvInt("REDIS_PORT", 6379),
-			DB:       getEnvInt("REDIS_DB", 0),
-			Password: getEnv("REDIS_PASSWORD", ""),
-		},
 		Auth: AuthConfig{
 			JWTAccessSecret:           os.Getenv("JWT_ACCESS_SECRET"),
 			JWTRefreshSecret:          os.Getenv("JWT_REFRESH_SECRET"),
@@ -159,6 +162,12 @@ func NewConfig() *Config {
 			AuthRateLimitBurst: getEnvInt("AUTH_RATE_LIMIT_BURST", 5),
 			MaxRequestBody:     int64(getEnvInt("MAX_REQUEST_BODY_BYTES", 1<<20)),
 			TrustedProxies:     parseCSVEnv("TRUSTED_PROXIES", ""),
+		},
+		Observability: ObservabilityConfig{
+			MetricsEnabled: getEnvBool("METRICS_ENABLED", false),
+			PprofEnabled:   getEnvBool("PPROF_ENABLED", false),
+			AdminHost:      getEnv("ADMIN_HOST", "127.0.0.1"),
+			AdminPort:      getEnvInt("ADMIN_PORT", 9090),
 		},
 		Tracing: TracingConfig{
 			Enabled:        getEnvBool("OTEL_ENABLED", false),

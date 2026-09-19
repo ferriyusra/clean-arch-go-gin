@@ -21,12 +21,16 @@ func TestNewConfig_DefaultValues(t *testing.T) {
 		t.Errorf("expected default port 8080, got %d", cfg.Server.Port)
 	}
 
-	if cfg.Redis.Host != "localhost" {
-		t.Errorf("expected default Redis host 'localhost', got %q", cfg.Redis.Host)
+	if cfg.Observability.AdminHost != "127.0.0.1" {
+		t.Errorf("expected default admin host 127.0.0.1, got %q", cfg.Observability.AdminHost)
 	}
 
-	if cfg.Redis.Port != 6379 {
-		t.Errorf("expected default Redis port 6379, got %d", cfg.Redis.Port)
+	if cfg.Observability.AdminPort != 9090 {
+		t.Errorf("expected default admin port 9090, got %d", cfg.Observability.AdminPort)
+	}
+
+	if cfg.Observability.MetricsEnabled || cfg.Observability.PprofEnabled {
+		t.Error("metrics and pprof must both default to off")
 	}
 
 }
@@ -35,8 +39,7 @@ func TestNewConfig_EnvironmentOverrides(t *testing.T) {
 	// Clear and set environment variables
 	clearEnv(t)
 	t.Setenv("SERVER_PORT", "9000")
-	t.Setenv("REDIS_HOST", "redis.example.com")
-	t.Setenv("REDIS_PORT", "6380")
+	t.Setenv("ADMIN_PORT", "9999")
 
 	// Act
 	cfg := NewConfig()
@@ -46,12 +49,8 @@ func TestNewConfig_EnvironmentOverrides(t *testing.T) {
 		t.Errorf("expected port 9000, got %d", cfg.Server.Port)
 	}
 
-	if cfg.Redis.Host != "redis.example.com" {
-		t.Errorf("expected Redis host 'redis.example.com', got %q", cfg.Redis.Host)
-	}
-
-	if cfg.Redis.Port != 6380 {
-		t.Errorf("expected Redis port 6380, got %d", cfg.Redis.Port)
+	if cfg.Observability.AdminPort != 9999 {
+		t.Errorf("expected admin port 9999, got %d", cfg.Observability.AdminPort)
 	}
 }
 
@@ -242,26 +241,6 @@ func TestNewConfig_AllServerSettings(t *testing.T) {
 	}
 }
 
-func TestNewConfig_RedisAuth(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("REDIS_HOST", "redis.prod")
-	t.Setenv("REDIS_PORT", "6380")
-	t.Setenv("REDIS_DB", "2")
-	t.Setenv("REDIS_PASSWORD", "secret123")
-
-	cfg := NewConfig()
-
-	if cfg.Redis.Host != "redis.prod" {
-		t.Errorf("expected host 'redis.prod'")
-	}
-	if cfg.Redis.DB != 2 {
-		t.Errorf("expected db 2, got %d", cfg.Redis.DB)
-	}
-	if cfg.Redis.Password != "secret123" {
-		t.Errorf("expected password 'secret123'")
-	}
-}
-
 // Helper function to clear all relevant environment variables
 // clearEnv blanks every variable NewConfig reads, so a test observes the
 // defaults rather than whatever the developer happens to have exported.
@@ -273,7 +252,7 @@ func clearEnv(t *testing.T) {
 	vars := []string{
 		"SERVER_PORT", "SERVER_HOST", "SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT", "SERVER_IDLE_TIMEOUT",
 		"DATABASE_DSN", "DATABASE_MAX_OPEN_CONNS", "DATABASE_MAX_IDLE_CONNS", "DATABASE_CONN_MAX_LIFETIME",
-		"REDIS_HOST", "REDIS_PORT", "REDIS_DB", "REDIS_PASSWORD",
+		"METRICS_ENABLED", "PPROF_ENABLED", "ADMIN_HOST", "ADMIN_PORT",
 	}
 	for _, v := range vars {
 		t.Setenv(v, "")

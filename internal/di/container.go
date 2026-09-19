@@ -17,6 +17,7 @@ import (
 	"github.com/ferriyusra/clean-arch-go-gin/internal/api"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/api/handler"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/api/middleware"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/observability"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/platform"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/tracing"
 
@@ -46,7 +47,10 @@ const (
 // cannot hold up process exit.
 const tracerShutdownTimeout = 5 * time.Second
 
-const ()
+// adminShutdownTimeout bounds the admin listener's drain. It is short on
+// purpose: an in-flight CPU profile can run for 30s, and nobody's deploy should
+// wait on one.
+const adminShutdownTimeout = 2 * time.Second
 
 // Container holds all application dependencies
 type Container struct {
@@ -54,6 +58,11 @@ type Container struct {
 	Router   *gin.Engine
 	Services *Services
 	Logger   *slog.Logger
+
+	// AdminServer serves /metrics and /debug/pprof on their own listener,
+	// separate from the public router. It is nil when both are disabled, which
+	// is the default, so every use site has to nil-check it.
+	AdminServer *http.Server
 
 	db             *gorm.DB
 	tracerShutdown tracing.ShutdownFunc
@@ -180,17 +189,40 @@ func NewContainer(cfg *platform.Config, logger *slog.Logger) (*Container, error)
 		}),
 	}
 
-	router := newRouter(cfg, logger)
+	// Metrics are only collected when they are going to be served; building the
+	// registry regardless would install the Go and process collectors for
+	// nothing.
+	var metrics *observability.Metrics
+	if cfg.Observability.MetricsEnabled {
+		metrics = observability.NewMetrics()
+	}
+
+	router := newRouter(cfg, logger, metrics)
 	api.SetupRoutes(router, handlers.Message, handlers.Counter, handlers.User,
 		services.Token, services.CSRF, authRateLimiter(cfg))
 	api.SetupHealthRoutes(router, handlers.Health)
 	api.SetupFallbacks(router)
+
+	// The admin listener is deliberately not part of the public router: /metrics
+	// publishes operational detail and pprof hands out heap dumps, so neither
+	// should be reachable wherever the API is. Config.Validate already refuses
+	// to bind pprof to a non-loopback address outside DEV_MODE.
+	adminServer := observability.NewAdminServer(observability.Config{
+		MetricsEnabled: cfg.Observability.MetricsEnabled,
+		PprofEnabled:   cfg.Observability.PprofEnabled,
+		Host:           cfg.Observability.AdminHost,
+		Port:           cfg.Observability.AdminPort,
+		ReadTimeout:    cfg.Server.ReadTimeout,
+		WriteTimeout:   cfg.Server.WriteTimeout,
+		IdleTimeout:    cfg.Server.IdleTimeout,
+	}, metrics)
 
 	return &Container{
 		Config:         cfg,
 		Router:         router,
 		Services:       services,
 		Logger:         logger,
+		AdminServer:    adminServer,
 		db:             db,
 		ownsDB:         ownsDB,
 		tracerShutdown: tracerShutdown,
@@ -202,7 +234,7 @@ func NewContainer(cfg *platform.Config, logger *slog.Logger) (*Container, error)
 // Order is load-bearing: RequestID runs first so everything downstream (the
 // recovery handler included) has a correlated logger, and Recovery wraps the
 // rest so a panic still produces the standard envelope.
-func newRouter(cfg *platform.Config, logger *slog.Logger) *gin.Engine {
+func newRouter(cfg *platform.Config, logger *slog.Logger, metrics *observability.Metrics) *gin.Engine {
 	if cfg.Auth.DevMode {
 		gin.SetMode(gin.DebugMode)
 	} else {
@@ -231,6 +263,12 @@ func newRouter(cfg *platform.Config, logger *slog.Logger) *gin.Engine {
 
 	r.Use(middleware.RequestID(logger))
 	r.Use(middleware.Recovery())
+
+	// After Recovery so a panicked request is counted with the 500 the recovery
+	// handler writes, rather than escaping the histogram entirely.
+	if metrics != nil {
+		r.Use(metrics.Middleware())
+	}
 	r.Use(middleware.AccessLog())
 	r.Use(middleware.SecurityHeaders(cfg.Auth.DevMode))
 	r.Use(cors.New(cors.Config{
@@ -267,6 +305,17 @@ func (c *Container) Close() error {
 	}
 
 	var errs []error
+
+	// The admin listener goes first: it is the least important thing running and
+	// the most likely to be holding an open scrape or a 30-second profile.
+	if c.AdminServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), adminShutdownTimeout)
+		if err := c.AdminServer.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("shutting down the admin listener: %w", err))
+		}
+		cancel()
+		c.AdminServer = nil
+	}
 
 	if c.tracerShutdown != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), tracerShutdownTimeout)
@@ -355,4 +404,29 @@ func authRateLimiter(cfg *platform.Config) gin.HandlerFunc {
 		RPS:   cfg.Security.AuthRateLimitRPS,
 		Burst: cfg.Security.AuthRateLimitBurst,
 	}))
+}
+
+// StartAdmin begins serving the metrics and pprof listener and returns
+// immediately. It is a no-op when neither signal is enabled.
+//
+// A failure here is logged, not fatal: the admin listener is a diagnostic aid,
+// and refusing to serve traffic because a metrics port is already taken would
+// turn an observability problem into an outage. Close shuts it down.
+func (c *Container) StartAdmin() {
+	if c.AdminServer == nil {
+		c.Logger.Debug("metrics and pprof are disabled; no admin listener")
+		return
+	}
+
+	addr := c.AdminServer.Addr
+	go func() {
+		c.Logger.Info("admin listener starting",
+			"addr", addr,
+			"metrics", c.Config.Observability.MetricsEnabled,
+			"pprof", c.Config.Observability.PprofEnabled,
+		)
+		if err := c.AdminServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			c.Logger.Error("admin listener", "addr", addr, "error", err.Error())
+		}
+	}()
 }

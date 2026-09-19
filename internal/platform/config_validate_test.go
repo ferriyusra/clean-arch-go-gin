@@ -139,3 +139,94 @@ func TestValidateReportsEveryProblemAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateObservability covers the admin listener that serves /metrics and
+// /debug/pprof.
+func TestValidateObservability(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T)
+		want  string // "" means the configuration must be accepted
+	}{
+		{
+			name: "both signals off leaves the admin settings unchecked",
+			setup: func(t *testing.T) {
+				t.Setenv("ADMIN_PORT", "70000")
+				t.Setenv("ADMIN_HOST", "0.0.0.0")
+			},
+		},
+		{
+			name: "admin port out of range",
+			setup: func(t *testing.T) {
+				t.Setenv("METRICS_ENABLED", "true")
+				t.Setenv("ADMIN_PORT", "70000")
+			},
+			want: "ADMIN_PORT=70000 is outside 1-65535",
+		},
+		{
+			// Serving the admin endpoints on the public port would defeat the
+			// entire point of a separate listener.
+			name: "admin port collides with the public port",
+			setup: func(t *testing.T) {
+				t.Setenv("METRICS_ENABLED", "true")
+				t.Setenv("SERVER_PORT", "8080")
+				t.Setenv("ADMIN_PORT", "8080")
+			},
+			want: "must differ from SERVER_PORT",
+		},
+		{
+			// The rule this block exists for: pprof hands an unauthenticated
+			// caller a heap dump and a free 30-second CPU stall.
+			name: "pprof on a public interface outside dev mode",
+			setup: func(t *testing.T) {
+				t.Setenv("PPROF_ENABLED", "true")
+				t.Setenv("ADMIN_HOST", "0.0.0.0")
+			},
+			want: "PPROF_ENABLED requires a loopback ADMIN_HOST",
+		},
+		{
+			name: "pprof on loopback is fine in production",
+			setup: func(t *testing.T) {
+				t.Setenv("PPROF_ENABLED", "true")
+				t.Setenv("ADMIN_HOST", "127.0.0.1")
+			},
+		},
+		{
+			// Metrics leak operational detail but cannot be used to stall the
+			// process, so they are not held to the loopback rule.
+			name: "metrics alone on a public interface is allowed",
+			setup: func(t *testing.T) {
+				t.Setenv("METRICS_ENABLED", "true")
+				t.Setenv("ADMIN_HOST", "0.0.0.0")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			productionEnv(t)
+			tt.setup(t)
+
+			err := platform.NewConfig().Validate()
+
+			if tt.want == "" {
+				testutil.NoError(t, err)
+				return
+			}
+			testutil.Error(t, err, tt.name)
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("expected the error to mention %q, got: %v", tt.want, err)
+			}
+		})
+	}
+}
+
+// TestValidateAllowsPprofOnAnyInterfaceInDevMode is separate because
+// productionEnv pins DEV_MODE=false.
+func TestValidateAllowsPprofOnAnyInterfaceInDevMode(t *testing.T) {
+	t.Setenv("DEV_MODE", "true")
+	t.Setenv("PPROF_ENABLED", "true")
+	t.Setenv("ADMIN_HOST", "0.0.0.0")
+
+	testutil.NoError(t, platform.NewConfig().Validate())
+}

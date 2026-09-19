@@ -75,6 +75,10 @@ func run() error {
 	// Background maintenance lives as long as the shutdown context.
 	container.StartJanitor(ctx)
 
+	// The metrics/pprof listener is separate from the public server, so it has
+	// its own start and is drained by container.Close.
+	container.StartAdmin()
+
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("server starting",
@@ -83,6 +87,7 @@ func run() error {
 			"dev_mode", cfg.Auth.DevMode,
 			"database", cfg.Database.Type,
 			"tracing", cfg.Tracing.Enabled,
+			"metrics", cfg.Observability.MetricsEnabled,
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
