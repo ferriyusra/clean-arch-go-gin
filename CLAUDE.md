@@ -152,11 +152,20 @@ Longer walkthroughs: `TESTING.md` (all four test harnesses),
   max-age, so the two can no longer drift.
 - `UserService.Register` and `Login` mint **and persist** the token pair; the
   handler only moves them into cookies.
-- Refresh tokens are JWTs **and** rows in the DB, so they can be revoked.
-  `Refresh` validates the JWT, then requires a matching unexpired row. Logout
-  deletes rows via `RevokeRefreshTokens` and always succeeds.
-- CSRF is stateless HMAC-SHA256: `hex(nonce).hex(hmac(nonce))`, validated by
-  recomputing the MAC. Clients fetch one from `GET /api/csrf`.
+- Refresh tokens are JWTs **and** rows in the DB, but only a SHA-256 digest is
+  stored, never the token. `Refresh` validates the JWT, then requires a matching
+  unexpired row, then **rotates**: the presented token is deleted and a new pair
+  issued. A token that verifies but has no row is treated as a replay and
+  revokes every session for that user. Each refresh token carries a random JWT
+  ID, without which two tokens minted in the same second would be identical and
+  rotation would be a no-op. Expired rows are swept by a janitor started from
+  `Container.StartJanitor`. Logout deletes rows and always succeeds.
+- CSRF is stateless HMAC-SHA256:
+  `hex(nonce).hex(issuedAt).hex(hmac(nonce+issuedAt))`, validated by recomputing
+  the MAC. The issue time is inside the signed material, so it cannot be edited
+  to extend a captured token, and it is only read *after* the MAC verifies.
+  Tokens expire after `CSRF_TOKEN_TTL` (default 12h) because a stateless token
+  cannot be revoked. Clients fetch one from `GET /api/csrf`.
 - `DEV_MODE=true` substitutes throwaway secrets, drops the cookie `Secure` flag
   and keeps gin in debug mode. With it off, `Config.Validate` requires all three
   secrets, each at least 32 characters, with the two JWT secrets different.

@@ -653,7 +653,32 @@ fetch(`${API_BASE_URL}/api/auth/login`, { ... })
 
 ### Refresh Token Revocation
 
-Refresh tokens are persisted in the database via `RefreshTokenRepository`. On login/register, tokens are stored with an expiry. On logout, all refresh tokens for the user are revoked. On refresh, the token is validated against the database (checked for existence, revocation status, and expiry) before issuing a new access token.
+Refresh tokens are persisted via `RefreshTokenRepository`, but only as a
+SHA-256 digest: the token itself is never written, so a leaked database dump
+yields nothing that can be replayed. Rows are hard-deleted rather than soft
+deleted, because a revoked credential that lingers in the table is one that can
+be restored, and a soft-deleted row would also keep its slot in the unique
+index on the digest.
+
+On login and register a digest is stored with an expiry. On logout every digest
+for the user is deleted.
+
+**Refresh rotates the pair.** Each refresh deletes the presented token and
+issues a new access *and* refresh token, so a stolen refresh token is usable
+for one request rather than for its full seven days. The old row is removed
+before the new one is written: a crash in between costs the user a re-login
+instead of leaving two live tokens for one session.
+
+**Reuse is treated as theft.** A token that verifies as a JWT but has no row
+was either revoked by a logout or already rotated away. Those are
+indistinguishable from the server side, and the second is a replay, so every
+session for that user is revoked. The false positive is a client that fires two
+refreshes with the same token and has to sign in again; the false negative
+would be an attacker holding a stolen session indefinitely.
+
+Expired rows are swept on `REFRESH_TOKEN_PURGE_INTERVAL` (default hourly, `0`
+disables it). Nothing ever reads them again, so without the sweep the table
+only grows.
 
 ### Rate Limiting
 

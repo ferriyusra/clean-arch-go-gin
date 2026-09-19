@@ -152,8 +152,27 @@ can never reach a response body.
 JWTs are delivered only as HttpOnly cookies — there is no `Authorization: Bearer`
 path. Access tokens last 15 minutes, refresh tokens 7 days; both TTLs are
 configurable and single-sourced, so a cookie max-age cannot drift from the token
-it carries. Refresh tokens are also rows in the database, which is what lets
-logout revoke them. CSRF is stateless HMAC-SHA256, sent as `X-CSRF-Token`.
+it carries.
+
+Refresh tokens are stored as **SHA-256 digests**, never in the clear, so a
+leaked database dump contains nothing replayable. Rows are hard-deleted, because
+a revoked credential that lingers is one that can be restored.
+
+Every refresh **rotates the pair**: the presented token is deleted and a new
+access and refresh token issued, which bounds a stolen refresh token to a single
+request instead of seven days. A token that verifies as a JWT but has no row was
+either revoked or already rotated — indistinguishable, and the second case is a
+replay — so it is treated as theft and every session for that user is revoked.
+Expired rows are swept hourly by a janitor.
+
+Login costs the same whether the email exists or not: an unknown address is
+compared against a dummy bcrypt hash rather than returning early, because the
+difference between an instant reply and a ~60 ms one is enough to map which
+addresses are registered no matter how identical the message is.
+
+CSRF is stateless HMAC-SHA256 sent as `X-CSRF-Token`. The issue time is part of
+the signed material and tokens expire after `CSRF_TOKEN_TTL`, since a stateless
+token cannot be revoked once issued.
 
 See [AUTH.md](AUTH.md) for the full reference.
 
@@ -238,6 +257,8 @@ Copy `env.example` to `.env`; it documents every variable. The important ones:
 | `DATABASE_TYPE` | `sqlite` (default) or `postgres`; anything else is rejected at startup |
 | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `CSRF_SECRET` | required outside dev mode, minimum 32 characters, and the two JWT secrets must differ |
 | `LOG_LEVEL`, `LOG_FORMAT` | `debug`/`info`/`warn`/`error`, `json`/`text` |
+| `CSRF_TOKEN_TTL` | how long a CSRF token stays valid (default 12h) |
+| `REFRESH_TOKEN_PURGE_INTERVAL` | how often expired refresh rows are swept; `0` disables it |
 | `OTEL_ENABLED` | off by default; `true` turns on request and database spans |
 | `OTEL_TRACES_EXPORTER` | `otlp` (a collector) or `console` (stdout, no collector needed) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | defaults to `http://localhost:4318` |
