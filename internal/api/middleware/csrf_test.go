@@ -3,6 +3,7 @@ package middleware_test
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -12,12 +13,12 @@ import (
 )
 
 func TestCSRFMiddleware(t *testing.T) {
-	csrfService := csrf.NewCSRFService("test-csrf-secret")
+	csrfService := csrf.NewCSRFService("test-csrf-secret", time.Hour)
 
 	validToken, err := csrfService.GenerateToken()
 	testutil.NoError(t, err)
 
-	foreignToken, err := csrf.NewCSRFService("another-csrf-secret").GenerateToken()
+	foreignToken, err := csrf.NewCSRFService("another-csrf-secret", time.Hour).GenerateToken()
 	testutil.NoError(t, err)
 
 	tests := []struct {

@@ -12,6 +12,7 @@ package mock
 import (
 	context "context"
 	reflect "reflect"
+	time "time"
 
 	entity "github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	uuid "github.com/google/uuid"
@@ -80,40 +81,40 @@ func (c *MockRefreshTokenRepositoryCreateCall) DoAndReturn(f func(context.Contex
 	return c
 }
 
-// DeleteByToken mocks base method.
-func (m *MockRefreshTokenRepository) DeleteByToken(ctx context.Context, tokenString string) error {
+// DeleteByTokenHash mocks base method.
+func (m *MockRefreshTokenRepository) DeleteByTokenHash(ctx context.Context, tokenHash string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteByToken", ctx, tokenString)
+	ret := m.ctrl.Call(m, "DeleteByTokenHash", ctx, tokenHash)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// DeleteByToken indicates an expected call of DeleteByToken.
-func (mr *MockRefreshTokenRepositoryMockRecorder) DeleteByToken(ctx, tokenString any) *MockRefreshTokenRepositoryDeleteByTokenCall {
+// DeleteByTokenHash indicates an expected call of DeleteByTokenHash.
+func (mr *MockRefreshTokenRepositoryMockRecorder) DeleteByTokenHash(ctx, tokenHash any) *MockRefreshTokenRepositoryDeleteByTokenHashCall {
 	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteByToken", reflect.TypeOf((*MockRefreshTokenRepository)(nil).DeleteByToken), ctx, tokenString)
-	return &MockRefreshTokenRepositoryDeleteByTokenCall{Call: call}
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteByTokenHash", reflect.TypeOf((*MockRefreshTokenRepository)(nil).DeleteByTokenHash), ctx, tokenHash)
+	return &MockRefreshTokenRepositoryDeleteByTokenHashCall{Call: call}
 }
 
-// MockRefreshTokenRepositoryDeleteByTokenCall wrap *gomock.Call
-type MockRefreshTokenRepositoryDeleteByTokenCall struct {
+// MockRefreshTokenRepositoryDeleteByTokenHashCall wrap *gomock.Call
+type MockRefreshTokenRepositoryDeleteByTokenHashCall struct {
 	*gomock.Call
 }
 
 // Return rewrite *gomock.Call.Return
-func (c *MockRefreshTokenRepositoryDeleteByTokenCall) Return(arg0 error) *MockRefreshTokenRepositoryDeleteByTokenCall {
+func (c *MockRefreshTokenRepositoryDeleteByTokenHashCall) Return(arg0 error) *MockRefreshTokenRepositoryDeleteByTokenHashCall {
 	c.Call = c.Call.Return(arg0)
 	return c
 }
 
 // Do rewrite *gomock.Call.Do
-func (c *MockRefreshTokenRepositoryDeleteByTokenCall) Do(f func(context.Context, string) error) *MockRefreshTokenRepositoryDeleteByTokenCall {
+func (c *MockRefreshTokenRepositoryDeleteByTokenHashCall) Do(f func(context.Context, string) error) *MockRefreshTokenRepositoryDeleteByTokenHashCall {
 	c.Call = c.Call.Do(f)
 	return c
 }
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockRefreshTokenRepositoryDeleteByTokenCall) DoAndReturn(f func(context.Context, string) error) *MockRefreshTokenRepositoryDeleteByTokenCall {
+func (c *MockRefreshTokenRepositoryDeleteByTokenHashCall) DoAndReturn(f func(context.Context, string) error) *MockRefreshTokenRepositoryDeleteByTokenHashCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }
@@ -156,41 +157,80 @@ func (c *MockRefreshTokenRepositoryDeleteByUserIDCall) DoAndReturn(f func(contex
 	return c
 }
 
-// FindByToken mocks base method.
-func (m *MockRefreshTokenRepository) FindByToken(ctx context.Context, tokenString string) (*entity.RefreshTokenEntity, error) {
+// DeleteExpired mocks base method.
+func (m *MockRefreshTokenRepository) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindByToken", ctx, tokenString)
-	ret0, _ := ret[0].(*entity.RefreshTokenEntity)
+	ret := m.ctrl.Call(m, "DeleteExpired", ctx, before)
+	ret0, _ := ret[0].(int64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// FindByToken indicates an expected call of FindByToken.
-func (mr *MockRefreshTokenRepositoryMockRecorder) FindByToken(ctx, tokenString any) *MockRefreshTokenRepositoryFindByTokenCall {
+// DeleteExpired indicates an expected call of DeleteExpired.
+func (mr *MockRefreshTokenRepositoryMockRecorder) DeleteExpired(ctx, before any) *MockRefreshTokenRepositoryDeleteExpiredCall {
 	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByToken", reflect.TypeOf((*MockRefreshTokenRepository)(nil).FindByToken), ctx, tokenString)
-	return &MockRefreshTokenRepositoryFindByTokenCall{Call: call}
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteExpired", reflect.TypeOf((*MockRefreshTokenRepository)(nil).DeleteExpired), ctx, before)
+	return &MockRefreshTokenRepositoryDeleteExpiredCall{Call: call}
 }
 
-// MockRefreshTokenRepositoryFindByTokenCall wrap *gomock.Call
-type MockRefreshTokenRepositoryFindByTokenCall struct {
+// MockRefreshTokenRepositoryDeleteExpiredCall wrap *gomock.Call
+type MockRefreshTokenRepositoryDeleteExpiredCall struct {
 	*gomock.Call
 }
 
 // Return rewrite *gomock.Call.Return
-func (c *MockRefreshTokenRepositoryFindByTokenCall) Return(arg0 *entity.RefreshTokenEntity, arg1 error) *MockRefreshTokenRepositoryFindByTokenCall {
+func (c *MockRefreshTokenRepositoryDeleteExpiredCall) Return(arg0 int64, arg1 error) *MockRefreshTokenRepositoryDeleteExpiredCall {
 	c.Call = c.Call.Return(arg0, arg1)
 	return c
 }
 
 // Do rewrite *gomock.Call.Do
-func (c *MockRefreshTokenRepositoryFindByTokenCall) Do(f func(context.Context, string) (*entity.RefreshTokenEntity, error)) *MockRefreshTokenRepositoryFindByTokenCall {
+func (c *MockRefreshTokenRepositoryDeleteExpiredCall) Do(f func(context.Context, time.Time) (int64, error)) *MockRefreshTokenRepositoryDeleteExpiredCall {
 	c.Call = c.Call.Do(f)
 	return c
 }
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockRefreshTokenRepositoryFindByTokenCall) DoAndReturn(f func(context.Context, string) (*entity.RefreshTokenEntity, error)) *MockRefreshTokenRepositoryFindByTokenCall {
+func (c *MockRefreshTokenRepositoryDeleteExpiredCall) DoAndReturn(f func(context.Context, time.Time) (int64, error)) *MockRefreshTokenRepositoryDeleteExpiredCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// FindByTokenHash mocks base method.
+func (m *MockRefreshTokenRepository) FindByTokenHash(ctx context.Context, tokenHash string) (*entity.RefreshTokenEntity, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByTokenHash", ctx, tokenHash)
+	ret0, _ := ret[0].(*entity.RefreshTokenEntity)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByTokenHash indicates an expected call of FindByTokenHash.
+func (mr *MockRefreshTokenRepositoryMockRecorder) FindByTokenHash(ctx, tokenHash any) *MockRefreshTokenRepositoryFindByTokenHashCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByTokenHash", reflect.TypeOf((*MockRefreshTokenRepository)(nil).FindByTokenHash), ctx, tokenHash)
+	return &MockRefreshTokenRepositoryFindByTokenHashCall{Call: call}
+}
+
+// MockRefreshTokenRepositoryFindByTokenHashCall wrap *gomock.Call
+type MockRefreshTokenRepositoryFindByTokenHashCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockRefreshTokenRepositoryFindByTokenHashCall) Return(arg0 *entity.RefreshTokenEntity, arg1 error) *MockRefreshTokenRepositoryFindByTokenHashCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockRefreshTokenRepositoryFindByTokenHashCall) Do(f func(context.Context, string) (*entity.RefreshTokenEntity, error)) *MockRefreshTokenRepositoryFindByTokenHashCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockRefreshTokenRepositoryFindByTokenHashCall) DoAndReturn(f func(context.Context, string) (*entity.RefreshTokenEntity, error)) *MockRefreshTokenRepositoryFindByTokenHashCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

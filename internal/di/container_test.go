@@ -279,3 +279,69 @@ func TestValidationErrorsAreCamelCaseAndCorrelated(t *testing.T) {
 		}
 	}
 }
+
+// TestRefreshRotatesAndDetectsReuse is the end-to-end proof of the refresh
+// token design. Nothing is mocked: a replayed token has to take the whole
+// session family down, through the real router, service and database.
+func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
+	engine := newTestContainer(t).Router
+	csrf := csrfToken(t, engine)
+
+	registerRec := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+		"email": "rotation@example.com", "password": "password123", "name": "Rotation",
+	}))
+	testutil.Equal(t, registerRec.Code, http.StatusCreated, "register status")
+	original := testutil.Cookies(registerRec)[middleware.RefreshTokenCookie].Value
+
+	// 1. The first refresh succeeds and hands back a different token.
+	firstRec := testutil.Do(engine, refreshRequest(t, original, csrf))
+	testutil.Equal(t, firstRec.Code, http.StatusOK, "first refresh status")
+
+	rotated := testutil.Cookies(firstRec)[middleware.RefreshTokenCookie].Value
+	testutil.True(t, rotated != "", "a new refresh token is issued")
+	testutil.True(t, rotated != original, "the refresh token actually rotated")
+
+	// 2. Replaying the original token is refused: it was already rotated away.
+	replayRec := testutil.Do(engine, refreshRequest(t, original, csrf))
+	testutil.Equal(t, replayRec.Code, http.StatusUnauthorized, "replay status")
+
+	// 3. And the replay revoked the whole family, so the token that was
+	// legitimately issued in step 1 is dead too. That is the point: once a
+	// token is known to have been copied, the session cannot be trusted.
+	afterReuseRec := testutil.Do(engine, refreshRequest(t, rotated, csrf))
+	testutil.Equal(t, afterReuseRec.Code, http.StatusUnauthorized,
+		"the rotated token is revoked once reuse is detected")
+}
+
+// TestLoginDoesNotRevealWhichEmailsExist checks the message, which is the part
+// a test can assert reliably; the timing equalisation it pairs with is covered
+// by the dummy hash comparison in the service.
+func TestLoginDoesNotRevealWhichEmailsExist(t *testing.T) {
+	engine := newTestContainer(t).Router
+
+	testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/register", map[string]string{
+		"email": "known@example.com", "password": "password123", "name": "Known",
+	}))
+
+	unknown := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "nobody@example.com", "password": "password123",
+	}))
+	wrongPassword := testutil.Do(engine, testutil.JSONRequest(t, http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "known@example.com", "password": "the-wrong-password",
+	}))
+
+	testutil.Equal(t, unknown.Code, wrongPassword.Code, "status for unknown email vs wrong password")
+	testutil.Equal(t, testutil.Envelope(t, unknown).Message,
+		testutil.Envelope(t, wrongPassword).Message, "message for unknown email vs wrong password")
+}
+
+func refreshRequest(t *testing.T, refreshToken, csrf string) *http.Request {
+	t.Helper()
+
+	req := testutil.WithCookie(
+		testutil.JSONRequest(t, http.MethodPost, "/api/auth/refresh", nil),
+		middleware.RefreshTokenCookie, refreshToken,
+	)
+	req.Header.Set("X-CSRF-Token", csrf)
+	return req
+}

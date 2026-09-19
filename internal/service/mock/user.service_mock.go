@@ -122,6 +122,45 @@ func (c *MockUserServiceLoginCall) DoAndReturn(f func(context.Context, *request.
 	return c
 }
 
+// PurgeExpiredRefreshTokens mocks base method.
+func (m *MockUserService) PurgeExpiredRefreshTokens(ctx context.Context) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PurgeExpiredRefreshTokens", ctx)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// PurgeExpiredRefreshTokens indicates an expected call of PurgeExpiredRefreshTokens.
+func (mr *MockUserServiceMockRecorder) PurgeExpiredRefreshTokens(ctx any) *MockUserServicePurgeExpiredRefreshTokensCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PurgeExpiredRefreshTokens", reflect.TypeOf((*MockUserService)(nil).PurgeExpiredRefreshTokens), ctx)
+	return &MockUserServicePurgeExpiredRefreshTokensCall{Call: call}
+}
+
+// MockUserServicePurgeExpiredRefreshTokensCall wrap *gomock.Call
+type MockUserServicePurgeExpiredRefreshTokensCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockUserServicePurgeExpiredRefreshTokensCall) Return(arg0 int64, arg1 error) *MockUserServicePurgeExpiredRefreshTokensCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockUserServicePurgeExpiredRefreshTokensCall) Do(f func(context.Context) (int64, error)) *MockUserServicePurgeExpiredRefreshTokensCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockUserServicePurgeExpiredRefreshTokensCall) DoAndReturn(f func(context.Context) (int64, error)) *MockUserServicePurgeExpiredRefreshTokensCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
 // Refresh mocks base method.
 func (m *MockUserService) Refresh(ctx context.Context, refreshToken string) (*response.RefreshResponse, error) {
 	m.ctrl.T.Helper()

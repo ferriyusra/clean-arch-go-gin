@@ -28,10 +28,15 @@ type RegisterResponse struct {
 	RefreshToken string  `json:"-"`
 }
 
-// RefreshResponse carries a freshly minted access token, again destined for a
-// cookie rather than the response body.
+// RefreshResponse carries a freshly minted token pair, destined for cookies
+// rather than the response body.
+//
+// Refresh returns a new *refresh* token as well, not just an access token:
+// every refresh rotates the pair so that a stolen refresh token has a usable
+// life measured in one request rather than in days.
 type RefreshResponse struct {
-	AccessToken string `json:"-"`
+	AccessToken  string `json:"-"`
+	RefreshToken string `json:"-"`
 }
 
 type CSRFTokenResponse struct {

@@ -72,6 +72,9 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Background maintenance lives as long as the shutdown context.
+	container.StartJanitor(ctx)
+
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("server starting",

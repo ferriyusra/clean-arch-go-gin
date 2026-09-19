@@ -21,7 +21,7 @@ func TestNewCSRFService(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewCSRFService(tt.secret)
+			service := NewCSRFService(tt.secret, testCSRFTTL)
 
 			if service == nil {
 				t.Errorf("expected non-nil service, got nil")

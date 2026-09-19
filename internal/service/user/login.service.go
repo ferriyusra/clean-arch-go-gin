@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -25,9 +26,12 @@ func (s *userService) Login(ctx context.Context, req *request.LoginRequest) (*re
 		return nil, apperr.Internal(fmt.Errorf("finding user by email: %w", err))
 	}
 
-	// A missing user and a wrong password deliberately produce the same error,
-	// so the response cannot be used to enumerate registered addresses.
+	// A missing user and a wrong password produce the same error *and* cost the
+	// same time. Returning early here would skip bcrypt entirely, and the
+	// difference between a ~60ms reply and an instant one is enough to map which
+	// addresses are registered, no matter how identical the message is.
 	if user == nil {
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(req.Password))
 		return nil, apperr.ErrInvalidCredentials
 	}
 
@@ -52,3 +56,20 @@ func (s *userService) Login(ctx context.Context, req *request.LoginRequest) (*re
 		RefreshToken: refreshToken,
 	}, nil
 }
+
+// dummyPasswordHash is what an unknown email is compared against, purely to
+// spend the same work a real comparison would.
+//
+// It is computed once on first use rather than at init so that process startup
+// does not pay for it, and so a failure here cannot panic the program: bcrypt
+// cannot realistically fail on a fixed short input at the default cost, and if
+// it somehow did, a nil hash makes the comparison return quickly with an error
+// rather than taking the service down.
+var dummyPasswordHash = sync.OnceValue(func() []byte {
+	hash, err := bcrypt.GenerateFromPassword(
+		[]byte("timing-equalisation-placeholder"), bcrypt.DefaultCost)
+	if err != nil {
+		return nil
+	}
+	return hash
+})

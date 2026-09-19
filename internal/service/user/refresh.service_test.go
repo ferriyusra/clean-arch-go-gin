@@ -11,83 +11,177 @@ import (
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/service/token"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/testutil"
 )
 
-func TestRefresh(t *testing.T) {
-	userID := uuid.New()
+// issuedRefreshToken mints a refresh token and returns it with the digest the
+// repository would be asked for.
+func issuedRefreshToken(t *testing.T, deps *testDeps, userID uuid.UUID) (string, string) {
+	t.Helper()
 
+	tokenStr, err := deps.tokens.GenerateRefreshToken(userID)
+	testutil.NoError(t, err)
+
+	return tokenStr, token.Hash(tokenStr)
+}
+
+func liveRow(userID uuid.UUID, hash string) *entity.RefreshTokenEntity {
+	return &entity.RefreshTokenEntity{
+		ID:        uuid.New(),
+		UserID:    userID,
+		TokenHash: hash,
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+}
+
+// TestRefreshRotatesTheTokenPair is the core of the rotation design: the token
+// that was presented must be gone afterwards, and a different one issued.
+func TestRefreshRotatesTheTokenPair(t *testing.T) {
+	deps := newTestDeps(t)
+	userID := uuid.New()
+	presented, hash := issuedRefreshToken(t, deps, userID)
+
+	var storedHash string
+	gomock.InOrder(
+		deps.refreshTokens.EXPECT().FindByTokenHash(gomock.Any(), hash).
+			Return(liveRow(userID, hash), nil),
+		// The old row goes before the new one is written, so a crash in between
+		// costs a re-login rather than leaving two live tokens for one session.
+		deps.refreshTokens.EXPECT().DeleteByTokenHash(gomock.Any(), hash).Return(nil),
+		deps.refreshTokens.EXPECT().Create(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, row entity.RefreshTokenEntity) error {
+				storedHash = row.TokenHash
+				return nil
+			}),
+	)
+
+	result, err := deps.service.Refresh(context.Background(), presented)
+
+	testutil.NoError(t, err)
+	if result == nil {
+		t.Fatalf("expected a result")
+	}
+	testutil.True(t, result.AccessToken != "", "an access token is issued")
+	testutil.True(t, result.RefreshToken != "", "a refresh token is issued")
+	testutil.True(t, result.RefreshToken != presented, "the refresh token is a new one")
+	testutil.Equal(t, storedHash, token.Hash(result.RefreshToken), "the new token is the one stored")
+
+	// The new access token has to actually validate, not merely be non-empty.
+	claims, err := deps.tokens.ValidateAccessToken(result.AccessToken)
+	testutil.NoError(t, err)
+	testutil.Equal(t, claims.UserID, userID, "user id in the new access token")
+}
+
+// TestRefreshStoresOnlyADigest is a security regression test. A database dump
+// must not contain anything that can be replayed against the API.
+func TestRefreshStoresOnlyADigest(t *testing.T) {
+	deps := newTestDeps(t)
+	userID := uuid.New()
+	presented, hash := issuedRefreshToken(t, deps, userID)
+
+	var stored entity.RefreshTokenEntity
+	deps.refreshTokens.EXPECT().FindByTokenHash(gomock.Any(), hash).Return(liveRow(userID, hash), nil)
+	deps.refreshTokens.EXPECT().DeleteByTokenHash(gomock.Any(), hash).Return(nil)
+	deps.refreshTokens.EXPECT().Create(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, row entity.RefreshTokenEntity) error {
+			stored = row
+			return nil
+		})
+
+	result, err := deps.service.Refresh(context.Background(), presented)
+	testutil.NoError(t, err)
+
+	testutil.Equal(t, len(stored.TokenHash), 64, "a SHA-256 digest in hex")
+	testutil.True(t, stored.TokenHash != result.RefreshToken, "the raw token is not what is stored")
+	testutil.True(t, stored.TokenHash != presented, "the presented token is not what is stored")
+}
+
+// TestRefreshReuseRevokesEverySession covers the case that makes rotation worth
+// having: a token that verifies but has no row was either revoked or already
+// rotated. The second is a replay, so both are treated as theft.
+func TestRefreshReuseRevokesEverySession(t *testing.T) {
+	deps := newTestDeps(t)
+	userID := uuid.New()
+	presented, hash := issuedRefreshToken(t, deps, userID)
+
+	deps.refreshTokens.EXPECT().FindByTokenHash(gomock.Any(), hash).Return(nil, nil)
+	deps.refreshTokens.EXPECT().DeleteByUserID(gomock.Any(), userID).Return(nil)
+
+	_, err := deps.service.Refresh(context.Background(), presented)
+
+	testutil.ErrorIs(t, err, apperr.ErrRefreshTokenRevoked)
+}
+
+// Even when the revocation sweep fails, the token itself must still be refused.
+func TestRefreshReuseStillRefusesWhenRevocationFails(t *testing.T) {
+	deps := newTestDeps(t)
+	userID := uuid.New()
+	presented, hash := issuedRefreshToken(t, deps, userID)
+
+	deps.refreshTokens.EXPECT().FindByTokenHash(gomock.Any(), hash).Return(nil, nil)
+	deps.refreshTokens.EXPECT().DeleteByUserID(gomock.Any(), userID).
+		Return(errors.New("database down"))
+
+	_, err := deps.service.Refresh(context.Background(), presented)
+
+	testutil.ErrorIs(t, err, apperr.ErrRefreshTokenRevoked)
+}
+
+func TestRefreshRejectsBadTokens(t *testing.T) {
 	tests := []struct {
-		name string
-		// token is built per-case because a valid one has to be signed by the
-		// same service under test.
-		token   func(deps *testDeps) string
-		expect  func(deps *testDeps, token string)
+		name    string
+		token   func(deps *testDeps, userID uuid.UUID) string
+		expect  func(deps *testDeps, userID uuid.UUID, hash string)
 		wantErr error
 	}{
 		{
-			name: "issues a new access token for a live refresh token",
-			token: func(deps *testDeps) string {
-				tokenStr, err := deps.tokens.GenerateRefreshToken(userID)
-				testutil.NoError(t, err)
-				return tokenStr
-			},
-			expect: func(deps *testDeps, tokenStr string) {
-				deps.refreshTokens.EXPECT().FindByToken(gomock.Any(), tokenStr).
-					Return(&entity.RefreshTokenEntity{
-						ID:        uuid.New(),
-						UserID:    userID,
-						Token:     tokenStr,
-						ExpiresAt: time.Now().Add(time.Hour),
-					}, nil)
-			},
-		},
-		{
-			name:    "rejects a malformed token",
-			token:   func(*testDeps) string { return "not-a-jwt" },
-			expect:  func(*testDeps, string) {},
+			name:    "a malformed token never reaches the database",
+			token:   func(*testDeps, uuid.UUID) string { return "not-a-jwt" },
+			expect:  func(*testDeps, uuid.UUID, string) {},
 			wantErr: apperr.ErrInvalidRefreshToken,
 		},
 		{
-			name: "rejects a token that is no longer stored (revoked by logout)",
-			token: func(deps *testDeps) string {
-				tokenStr, err := deps.tokens.GenerateRefreshToken(userID)
-				testutil.NoError(t, err)
+			name: "an expired row is refused and cleaned up",
+			token: func(deps *testDeps, userID uuid.UUID) string {
+				tokenStr, _ := issuedRefreshToken(t, deps, userID)
 				return tokenStr
 			},
-			expect: func(deps *testDeps, tokenStr string) {
-				deps.refreshTokens.EXPECT().FindByToken(gomock.Any(), tokenStr).Return(nil, nil)
-			},
-			wantErr: apperr.ErrRefreshTokenRevoked,
-		},
-		{
-			name: "rejects a stored token past its expiry",
-			token: func(deps *testDeps) string {
-				tokenStr, err := deps.tokens.GenerateRefreshToken(userID)
-				testutil.NoError(t, err)
-				return tokenStr
-			},
-			expect: func(deps *testDeps, tokenStr string) {
-				deps.refreshTokens.EXPECT().FindByToken(gomock.Any(), tokenStr).
+			expect: func(deps *testDeps, userID uuid.UUID, hash string) {
+				deps.refreshTokens.EXPECT().FindByTokenHash(gomock.Any(), hash).
 					Return(&entity.RefreshTokenEntity{
 						ID:        uuid.New(),
 						UserID:    userID,
-						Token:     tokenStr,
+						TokenHash: hash,
 						ExpiresAt: time.Now().Add(-time.Hour),
 					}, nil)
+				deps.refreshTokens.EXPECT().DeleteByTokenHash(gomock.Any(), hash).Return(nil)
 			},
 			wantErr: apperr.ErrRefreshTokenExpired,
 		},
 		{
-			name: "reports a lookup failure as internal",
-			token: func(deps *testDeps) string {
-				tokenStr, err := deps.tokens.GenerateRefreshToken(userID)
-				testutil.NoError(t, err)
+			name: "a lookup failure is internal, not a revoked token",
+			token: func(deps *testDeps, userID uuid.UUID) string {
+				tokenStr, _ := issuedRefreshToken(t, deps, userID)
 				return tokenStr
 			},
-			expect: func(deps *testDeps, tokenStr string) {
-				deps.refreshTokens.EXPECT().FindByToken(gomock.Any(), tokenStr).
+			expect: func(deps *testDeps, userID uuid.UUID, hash string) {
+				deps.refreshTokens.EXPECT().FindByTokenHash(gomock.Any(), hash).
 					Return(nil, errors.New("database error"))
+			},
+			wantErr: apperr.ErrInternal,
+		},
+		{
+			name: "a rotation failure does not issue a new pair",
+			token: func(deps *testDeps, userID uuid.UUID) string {
+				tokenStr, _ := issuedRefreshToken(t, deps, userID)
+				return tokenStr
+			},
+			expect: func(deps *testDeps, userID uuid.UUID, hash string) {
+				deps.refreshTokens.EXPECT().FindByTokenHash(gomock.Any(), hash).
+					Return(liveRow(userID, hash), nil)
+				deps.refreshTokens.EXPECT().DeleteByTokenHash(gomock.Any(), hash).
+					Return(errors.New("delete failed"))
 			},
 			wantErr: apperr.ErrInternal,
 		},
@@ -96,32 +190,23 @@ func TestRefresh(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			deps := newTestDeps(t)
-			tokenStr := tt.token(deps)
-			tt.expect(deps, tokenStr)
+			userID := uuid.New()
 
-			result, err := deps.service.Refresh(context.Background(), tokenStr)
+			presented := tt.token(deps, userID)
+			tt.expect(deps, userID, token.Hash(presented))
 
-			if tt.wantErr != nil {
-				testutil.ErrorIs(t, err, tt.wantErr)
-				return
+			result, err := deps.service.Refresh(context.Background(), presented)
+
+			testutil.ErrorIs(t, err, tt.wantErr)
+			if result != nil {
+				t.Errorf("expected nil result on error, got %+v", result)
 			}
-
-			testutil.NoError(t, err)
-			if result == nil {
-				t.Fatalf("expected a result")
-			}
-			testutil.True(t, result.AccessToken != "", "a new access token is issued")
-
-			// The token must actually validate, not merely be non-empty.
-			claims, err := deps.tokens.ValidateAccessToken(result.AccessToken)
-			testutil.NoError(t, err)
-			testutil.Equal(t, claims.UserID, userID, "user id in the new access token")
 		})
 	}
 }
 
-// TestRefreshRejectsAnAccessTokenPresentedAsRefresh guards the separation of the
-// two signing secrets.
+// The two signing secrets must not be interchangeable, or a stolen access token
+// could be traded for a full session.
 func TestRefreshRejectsAnAccessTokenPresentedAsRefresh(t *testing.T) {
 	deps := newTestDeps(t)
 
@@ -147,6 +232,7 @@ func TestRefreshContextCancellation(t *testing.T) {
 	}
 }
 
+// GetUser lives in refresh.service.go, so its tests live here too.
 func TestGetUser(t *testing.T) {
 	userID := uuid.New()
 

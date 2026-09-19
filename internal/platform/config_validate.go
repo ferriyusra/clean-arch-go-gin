@@ -29,6 +29,7 @@ func (c *Config) Validate() error {
 	problems = append(problems, c.validateAuth()...)
 	problems = append(problems, c.validateLog()...)
 	problems = append(problems, c.validateTracing()...)
+	problems = append(problems, c.validateTokenLifetimes()...)
 
 	if len(problems) == 0 {
 		return nil
@@ -58,6 +59,7 @@ func (c *Config) validateParsing() []string {
 		"SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT", "SERVER_IDLE_TIMEOUT",
 		"SERVER_SHUTDOWN_TIMEOUT", "SERVER_REQUEST_TIMEOUT",
 		"DATABASE_CONN_MAX_LIFETIME", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
+		"CSRF_TOKEN_TTL", "REFRESH_TOKEN_PURGE_INTERVAL",
 	}
 	for _, key := range durationVars {
 		if raw := os.Getenv(key); raw != "" {
@@ -223,4 +225,17 @@ func isLoopbackEndpoint(endpoint string) bool {
 	return strings.Contains(endpoint, "localhost") ||
 		strings.Contains(endpoint, "127.0.0.1") ||
 		strings.Contains(endpoint, "[::1]")
+}
+
+func (c *Config) validateTokenLifetimes() []string {
+	var problems []string
+
+	if c.Auth.CSRFTokenTTL <= 0 {
+		problems = append(problems, "CSRF_TOKEN_TTL must be positive")
+	}
+	if c.Auth.RefreshTokenPurgeInterval < 0 {
+		problems = append(problems, "REFRESH_TOKEN_PURGE_INTERVAL must not be negative (0 disables the sweep)")
+	}
+
+	return problems
 }

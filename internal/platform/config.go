@@ -29,6 +29,10 @@ type AuthConfig struct {
 	AllowedOrigins   []string
 	AccessTokenTTL   time.Duration
 	RefreshTokenTTL  time.Duration
+	CSRFTokenTTL     time.Duration
+	// RefreshTokenPurgeInterval is how often expired refresh-token rows are
+	// swept. Zero disables the sweep.
+	RefreshTokenPurgeInterval time.Duration
 }
 
 // ServerConfig holds HTTP server configuration
@@ -124,13 +128,15 @@ func NewConfig() *Config {
 			Password: getEnv("REDIS_PASSWORD", ""),
 		},
 		Auth: AuthConfig{
-			JWTAccessSecret:  os.Getenv("JWT_ACCESS_SECRET"),
-			JWTRefreshSecret: os.Getenv("JWT_REFRESH_SECRET"),
-			CSRFSecret:       os.Getenv("CSRF_SECRET"),
-			DevMode:          devMode,
-			AllowedOrigins:   parseCSVEnv("ALLOWED_ORIGINS", "http://localhost:5173"),
-			AccessTokenTTL:   getEnvDuration("JWT_ACCESS_TTL", 15*time.Minute),
-			RefreshTokenTTL:  getEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
+			JWTAccessSecret:           os.Getenv("JWT_ACCESS_SECRET"),
+			JWTRefreshSecret:          os.Getenv("JWT_REFRESH_SECRET"),
+			CSRFSecret:                os.Getenv("CSRF_SECRET"),
+			DevMode:                   devMode,
+			AllowedOrigins:            parseCSVEnv("ALLOWED_ORIGINS", "http://localhost:5173"),
+			AccessTokenTTL:            getEnvDuration("JWT_ACCESS_TTL", 15*time.Minute),
+			RefreshTokenTTL:           getEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
+			CSRFTokenTTL:              getEnvDuration("CSRF_TOKEN_TTL", 12*time.Hour),
+			RefreshTokenPurgeInterval: getEnvDuration("REFRESH_TOKEN_PURGE_INTERVAL", time.Hour),
 		},
 		Log: LogConfig{
 			Level:  strings.ToLower(getEnv("LOG_LEVEL", defaultLogLevel(devMode))),

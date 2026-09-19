@@ -156,7 +156,7 @@ func NewContainer(cfg *platform.Config, logger *slog.Logger) (*Container, error)
 			cfg.Auth.RefreshTokenTTL,
 		),
 		Token: tokenService,
-		CSRF:  csrfSvc.NewCSRFService(csrfSecret),
+		CSRF:  csrfSvc.NewCSRFService(csrfSecret, cfg.Auth.CSRFTokenTTL),
 	}
 
 	// Handlers
@@ -286,4 +286,48 @@ func orDefault(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// StartJanitor begins the background sweep of expired refresh tokens and
+// returns immediately.
+//
+// The goroutine exits when ctx is cancelled, which is what the shutdown signal
+// does, so it needs no separate stop channel and cannot outlive the process.
+func (c *Container) StartJanitor(ctx context.Context) {
+	interval := c.Config.Auth.RefreshTokenPurgeInterval
+	if interval <= 0 {
+		c.Logger.Info("expired refresh token sweep is disabled")
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			// Sweeping on start as well as on the tick matters: a service that
+			// is redeployed more often than the interval would otherwise never
+			// get around to it.
+			c.purgeExpiredRefreshTokens(ctx)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func (c *Container) purgeExpiredRefreshTokens(ctx context.Context) {
+	removed, err := c.Services.User.PurgeExpiredRefreshTokens(ctx)
+	if err != nil {
+		// A failed sweep is not worth taking the service down for; the rows are
+		// inert either way and the next tick will try again.
+		c.Logger.Error("sweeping expired refresh tokens", "error", err.Error())
+		return
+	}
+	if removed > 0 {
+		c.Logger.Info("swept expired refresh tokens", "removed", removed)
+	}
 }

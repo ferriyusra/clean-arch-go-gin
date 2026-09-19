@@ -102,8 +102,9 @@ func (h *UserHandler) Refresh(c *gin.Context) {
 		return
 	}
 
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(middleware.AccessTokenCookie, resp.AccessToken, int(h.cookies.AccessTTL.Seconds()), "/", "", h.cookies.Secure, true)
+	// Both cookies are rewritten: refresh rotates the pair, so the refresh token
+	// the client holds after this call is a different one.
+	h.setAuthCookies(c, resp.AccessToken, resp.RefreshToken)
 
 	OK(c, http.StatusOK, "Token refreshed", nil)
 }

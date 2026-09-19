@@ -26,6 +26,7 @@ type UserService interface {
 	GetUser(ctx context.Context, userID string) (*response.GetUser, error)
 	StoreRefreshToken(ctx context.Context, userID uuid.UUID, tokenStr string, expiresAt time.Time) error
 	RevokeRefreshTokens(ctx context.Context, userID uuid.UUID) error
+	PurgeExpiredRefreshTokens(ctx context.Context) (int64, error)
 }
 
 // userService is the concrete implementation of UserService
@@ -34,6 +35,8 @@ type userService struct {
 	refreshTokenRepository interfaces.RefreshTokenRepository
 	tokenService           token.TokenService
 	refreshTokenTTL        time.Duration
+	// now is swappable so tests can reason about expiry without sleeping.
+	now func() time.Time
 }
 
 // NewUserService creates a new instance of UserService.
@@ -51,6 +54,7 @@ func NewUserService(
 		refreshTokenRepository: refreshTokenRepository,
 		tokenService:           tokenService,
 		refreshTokenTTL:        refreshTokenTTL,
+		now:                    time.Now,
 	}
 }
 
@@ -67,7 +71,7 @@ func (s *userService) issueTokens(ctx context.Context, user response.GetUser) (a
 		return "", "", apperr.Internal(fmt.Errorf("generating refresh token: %w", err))
 	}
 
-	expiresAt := time.Now().Add(s.refreshTokenTTL)
+	expiresAt := s.now().Add(s.refreshTokenTTL)
 	if err = s.StoreRefreshToken(ctx, user.ID, refreshToken, expiresAt); err != nil {
 		return "", "", err
 	}

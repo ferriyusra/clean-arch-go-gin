@@ -11,6 +11,7 @@ import (
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/apperr"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/service/token"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/testutil"
 )
 
@@ -55,7 +56,8 @@ func TestStoreRefreshToken(t *testing.T) {
 
 			testutil.NoError(t, err)
 			testutil.Equal(t, stored.UserID, userID, "user id")
-			testutil.Equal(t, stored.Token, "the-token", "token")
+			testutil.Equal(t, stored.TokenHash, token.Hash("the-token"), "the digest, not the token, is stored")
+			testutil.True(t, stored.TokenHash != "the-token", "the raw token is never persisted")
 			testutil.Equal(t, stored.ExpiresAt, expiresAt, "expiry")
 			testutil.True(t, stored.ID != uuid.Nil, "row is given an id")
 		})

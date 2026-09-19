@@ -47,7 +47,7 @@ func newUserFixture(t *testing.T) *userFixture {
 		RefreshTokenExpiry: testRefreshTTL,
 	})
 
-	h := handler.NewUserHandler(users, csrf.NewCSRFService("test-csrf-secret"), handler.CookieConfig{
+	h := handler.NewUserHandler(users, csrf.NewCSRFService("test-csrf-secret", time.Hour), handler.CookieConfig{
 		AccessTTL:  testAccessTTL,
 		RefreshTTL: testRefreshTTL,
 		Secure:     true,
@@ -321,10 +321,13 @@ func TestLoginHandler(t *testing.T) {
 }
 
 func TestRefreshHandler(t *testing.T) {
-	t.Run("rotates the access token cookie", func(t *testing.T) {
+	t.Run("rotates both cookies", func(t *testing.T) {
 		f := newUserFixture(t)
 		f.users.EXPECT().Refresh(gomock.Any(), "the-refresh-token").
-			Return(&response.RefreshResponse{AccessToken: "a-fresh-access-token"}, nil)
+			Return(&response.RefreshResponse{
+				AccessToken:  "a-fresh-access-token",
+				RefreshToken: "a-fresh-refresh-token",
+			}, nil)
 
 		req := testutil.WithCookie(
 			testutil.JSONRequest(t, http.MethodPost, "/api/auth/refresh", nil),
@@ -337,10 +340,13 @@ func TestRefreshHandler(t *testing.T) {
 		cookies := testutil.Cookies(rec)
 		testutil.Equal(t, cookies[middleware.AccessTokenCookie].Value, "a-fresh-access-token", "new access cookie")
 
-		// Only the access token rotates; the refresh cookie is left alone.
-		if _, rotated := cookies[middleware.RefreshTokenCookie]; rotated {
-			t.Errorf("refresh cookie should not be rewritten on refresh")
-		}
+		// The refresh cookie has to be replaced too. Leaving the old one in
+		// place would keep a token alive that the server has already deleted,
+		// and the next refresh would look like a replay.
+		refresh, ok := cookies[middleware.RefreshTokenCookie]
+		testutil.True(t, ok, "the refresh cookie is rewritten")
+		testutil.Equal(t, refresh.Value, "a-fresh-refresh-token", "new refresh cookie")
+		testutil.Equal(t, refresh.HttpOnly, true, "refresh cookie stays HttpOnly")
 	})
 
 	t.Run("rejects a request with no refresh cookie", func(t *testing.T) {
