@@ -42,6 +42,9 @@ make build            # build a stripped, version-stamped binary
 make test             # all tests; works without a C toolchain
 make test-race        # all tests with -race (needs CGO_ENABLED=1 + gcc/clang)
 make test-coverage    # writes coverage.out and coverage.html
+make bench            # benchmarks only, with -benchmem
+make fuzz             # one fuzz target: PKG=... FUZZ=... FUZZTIME=30s
+make vuln             # govulncheck, pulled on demand
 make lint             # golangci-lint
 make fmt vet          # format, vet
 make mocks            # regenerate repository + service mocks
@@ -78,6 +81,7 @@ internal/
 ├── repository/
 │   ├── interfaces/       # contracts (*.repository_interface.go)
 │   ├── implementations/  # GORM implementations, one method per file
+│   ├── dbtx/             # carries a transaction through context.Context
 │   └── mock/             # generated repository mocks (used by service tests)
 │
 ├── model/
@@ -88,6 +92,7 @@ internal/
 ├── apperr/               # the application error type and its sentinels
 ├── logging/              # slog setup + context-scoped logger
 ├── tracing/              # OpenTelemetry setup, GORM spans, trace-id helpers
+├── observability/        # Prometheus metrics + pprof, on a separate admin listener
 ├── platform/             # config + validation, database, versioned migrations
 ├── di/                   # dependency injection container
 └── testutil/             # shared test harness (assertions, in-memory DB, HTTP)
@@ -95,36 +100,56 @@ internal/
 
 ## API Endpoints
 
-### Public
+Everything except the health probes lives under `/api/v1`, with no unversioned
+aliases beside it. The health endpoints stay unversioned deliberately: they are a
+contract with the orchestrator — liveness probes, load balancers, uptime monitors
+— all of which live outside this repository and must not have to be edited in
+lockstep with an `/api/v2`.
+
+### Health (unversioned)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/health` | Readiness: checks the database, 503 when it is down |
 | GET | `/api/health/live` | Liveness: is the process up (touches no dependency) |
 | GET | `/api/health/ready` | Same as `/api/health` |
-| GET | `/api/message` | Get message |
-| GET | `/api/csrf` | Get a CSRF token |
-| POST | `/api/auth/register` | Register a new user |
-| POST | `/api/auth/login` | Login |
-| POST | `/api/auth/refresh` | Refresh the access token (requires CSRF) |
+
+### Public
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/message` | Get message |
+| GET | `/api/v1/csrf` | Get a CSRF token |
+| POST | `/api/v1/auth/register` | Register a new user |
+| POST | `/api/v1/auth/login` | Login |
+| POST | `/api/v1/auth/refresh` | Rotate the token pair (requires CSRF) |
 
 ### Protected (requires the access-token cookie)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/auth/me` | Get the current user |
-| POST | `/api/auth/logout` | Logout (requires CSRF) |
-| GET | `/api/counter` | Get the counter value |
-| POST | `/api/counter` | Increment the counter (requires CSRF) |
+| GET | `/api/v1/auth/me` | Get the current user |
+| GET | `/api/v1/auth/sessions` | List active sessions, paginated (`?page=&limit=`) |
+| PATCH | `/api/v1/auth/password` | Change the password (requires CSRF) |
+| DELETE | `/api/v1/auth/me` | Delete the account (requires CSRF) |
+| POST | `/api/v1/auth/logout` | Logout (requires CSRF) |
+| GET | `/api/v1/counter` | Get the counter value |
+| POST | `/api/v1/counter` | Increment the counter (requires CSRF) |
 
 Every response — success, error, 404, even a recovered panic — uses the same
 envelope:
 
 ```json
 { "success": true,  "message": "User retrieved", "data": {} }
+{ "success": true,  "message": "Sessions retrieved", "data": [], "meta": { "page": 1, "limit": 20, "total": 3 } }
 { "success": false, "message": "Email is already registered" }
 { "success": false, "message": "Validation failed", "errors": { "email": "Must be a valid email address" } }
 ```
+
+Paginated endpoints read `?page=` and `?limit=` from the query string, default to
+page 1 and 20 rows, and refuse a limit above 100 — an unbounded `limit=1000000`
+is a denial of service that costs the caller one query string. The window that
+was actually used is reported back in `meta`.
 
 ## Errors
 
@@ -139,6 +164,7 @@ message strings.
 | `CodeForbidden` | 403 |
 | `CodeNotFound` | 404 |
 | `CodeConflict` | 409 |
+| `CodeTooManyRequests` | 429 |
 | `CodeUnavailable` | 503 |
 | `CodeTimeout` | 504 |
 | anything else | 500 |
@@ -243,9 +269,30 @@ fails on a key that breaks the rule, so it cannot drift. Log fields keep their
 OpenTelemetry spelling (`trace_id`, `span_id`); the camelCase rule is about the
 HTTP API, not about log records.
 
-There are no metrics and no profiling endpoint. Request ids plus traces cover
-most of what a service this size needs, and `/metrics` is a deliberate next step
-rather than an omission.
+**Metrics and profiling** live in `internal/observability` and are served on a
+**separate admin listener** (`127.0.0.1:9090` by default), never on the public
+router: Prometheus metrics at `/metrics`, the stdlib pprof handlers under
+`/debug/pprof/`, and a `/healthz` for the listener itself. Both are off by
+default.
+
+```bash
+METRICS_ENABLED=true make server
+curl http://127.0.0.1:9090/metrics
+```
+
+The separation is the point. `/debug/pprof` lets an unauthenticated caller dump
+the heap, stall the process for a thirty-second CPU profile or read a full
+goroutine dump, and `/metrics` leaks operational detail — route names, traffic
+shape, build info. Neither belongs on a port the internet can reach, so outside
+`DEV_MODE` startup refuses to bind pprof to a non-loopback `ADMIN_HOST`, and the
+pprof handlers are mounted on a mux we own rather than inherited from
+`net/http/pprof`'s `init()`, which would attach them to `http.DefaultServeMux`
+invisibly.
+
+The request counter and duration histogram are labelled by the gin *route
+template*, not the request path; a request that matched no route is labelled
+`unmatched`, because otherwise a stranger sending random URLs chooses our label
+values and mints unbounded time series.
 
 ## Environment
 
@@ -259,6 +306,9 @@ Copy `env.example` to `.env`; it documents every variable. The important ones:
 | `LOG_LEVEL`, `LOG_FORMAT` | `debug`/`info`/`warn`/`error`, `json`/`text` |
 | `CSRF_TOKEN_TTL` | how long a CSRF token stays valid (default 12h) |
 | `REFRESH_TOKEN_PURGE_INTERVAL` | how often expired refresh rows are swept; `0` disables it |
+| `METRICS_ENABLED` | off by default; `true` serves `/metrics` on the admin listener |
+| `PPROF_ENABLED` | off by default; leave it off unless someone is actively profiling |
+| `ADMIN_HOST`, `ADMIN_PORT` | where the admin listener binds, default `127.0.0.1:9090`; the port must differ from `SERVER_PORT`, and outside dev mode pprof refuses a non-loopback host |
 | `OTEL_ENABLED` | off by default; `true` turns on request and database spans |
 | `OTEL_TRACES_EXPORTER` | `otlp` (a collector) or `console` (stdout, no collector needed) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | defaults to `http://localhost:4318` |
@@ -341,9 +391,18 @@ Nested calls reuse the outer transaction rather than opening a second one —
 without that, sqlite, which allows a single writer, would block until the
 deadline instead of failing.
 
-`Register` and `Refresh` both use it. Before, a failure while storing the first
-refresh token left an account that existed but could not sign in, and whose
-email was permanently claimed by the unique index.
+Four methods use it. `Register` writes the account and its first refresh token
+together — before, a failure at the second step left an account that existed but
+could not sign in, and whose email was permanently claimed by the unique index.
+`Refresh` retires the presented token and issues the new pair as one change of
+state. `ChangePassword` stores the new hash and revokes every session in the same
+transaction, because a window where the password has changed but the old sessions
+survive is exactly what the user changed it to prevent. `DeleteAccount` removes
+the sessions and the account, since either half alone is worse than neither.
+
+A genuinely single statement is already atomic and is not wrapped; the
+transaction is for work that has to be all-or-nothing, or for a read that decides
+whether a write happens.
 
 ## Credits
 

@@ -100,9 +100,11 @@ These tests are where behaviour that only a real driver shows up gets pinned:
 
 - a missing row is `(nil, nil)`, not an error — the service layer depends on it;
 - the unique index on `email` really does reject a duplicate, which is the ground
-  truth behind the 409 that `POST /api/auth/register` returns;
+  truth behind the 409 that `POST /api/v1/auth/register` returns;
 - a soft-deleted user still occupies that unique index, so their address cannot
-  be registered again.
+  be registered again. `gorm.Config.TranslateError` is what turns that
+  constraint violation into `gorm.ErrDuplicatedKey`, which is the only reason
+  the service can tell a conflict from a server fault and answer 409.
 
 **sqlite is not postgres.** These tests cover query shape and error mapping.
 Behaviour that differs between engines needs a test against a real postgres —
@@ -111,7 +113,11 @@ Behaviour that differs between engines needs a test against a real postgres —
 ## 3. Handler and middleware tests — httptest with a real engine
 
 Handler tests mount the handler on a real `gin.Engine`, behind the same
-middleware production uses, and drive it with real HTTP requests.
+middleware production uses, and drive it with real HTTP requests. The paths
+below are the test's own — a handler test mounts a bare route rather than
+calling `SetupRoutes`, so they need not match the live `/api/v1/...` surface.
+That is also the gap these tests cannot close: only the container tests in
+`internal/di` prove a handler is reachable at the path it is meant to be.
 
 ```go
 r := testutil.NewEngine(t)

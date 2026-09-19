@@ -14,6 +14,9 @@ make test-coverage     # coverage.out + coverage.html, with -coverpkg=./...
 make lint              # golangci-lint run ./...
 make mocks             # Regenerate BOTH repository and service mocks
 make verify-mocks      # Fail if generated mocks are stale (CI runs this)
+make vuln              # govulncheck over ./... (via go run, no global install)
+make bench             # go test -bench . -benchmem ./...
+make fuzz              # Short fuzz pass: make fuzz PKG=./internal/service/csrf FUZZ=FuzzValidate
 make ci                # tidy-check + vet + verify-mocks + test-race
 make clean             # Remove ./bin, coverage files, test cache
 ```
@@ -52,7 +55,11 @@ Clean Architecture, dependencies point inward only:
   `BodyLimit`, `RateLimit`, `Timeout`, plus `AuthMiddleware`,
   `OptionalAuthMiddleware`, `CSRFMiddleware` and the `Get*FromContext` extractors.
 - **api/router.go**: `SetupRoutes`, `SetupHealthRoutes`, `SetupFallbacks`. CSRF
-  middleware is attached **per route**, not globally.
+  middleware is attached **per route**, not globally. The API lives under
+  `/api/v1`; health stays unversioned at `/api/health*` because it is an
+  orchestrator contract, not public API, and versioning it would mean editing
+  every probe on a version bump. There are no `/api/...` aliases — a test
+  asserts the unversioned surface 404s.
 - **service/**: one package per domain; depends on repository *interfaces* only.
 - **repository/interfaces/**: contracts, named `<domain>.repository_interface.go`.
 - **repository/implementations/<domain>/**: GORM impls, one method per file.
@@ -71,6 +78,10 @@ Clean Architecture, dependencies point inward only:
 - **di/container.go**: the single wiring point — validates config, builds the gin
   engine and its middleware chain, opens and migrates the DB, constructs repos →
   services → handlers → routes.
+- **observability/**: Prometheus metrics and `net/http/pprof`, served on their
+  own admin listener (`ADMIN_HOST`/`ADMIN_PORT`, loopback by default) and
+  deliberately never on the public router. Off unless `METRICS_ENABLED` or
+  `PPROF_ENABLED`.
 - **testutil/**: shared test harness (assertions, in-memory DB, HTTP helpers).
 
 Entry point: `cmd/server/main.go` → godotenv → `platform.NewConfig()` →
@@ -113,6 +124,18 @@ Cross-cutting facts that are not visible from a single file:
   every response type and fails on a key that breaks the rule; a new response
   struct has to be added to its `responseTypes()` list to be covered. Log fields
   keep OpenTelemetry spelling (`trace_id`, `span_id`) and are not affected.
+- **Pagination is a query-string DTO, not ad-hoc parameters.** `request.Pagination`
+  binds with `ShouldBindQuery`, defaults to page 1 / limit 20, and caps limit at
+  100 — without the ceiling a client asks for a million rows and the database
+  does the work. Paginated endpoints answer with `response.OKWithMeta`.
+- **Metrics and pprof are never on the public router.** They get their own
+  listener, built in `di.NewContainer` and started by `Container.StartAdmin`.
+  `Config.Validate` refuses to bind pprof to a non-loopback address outside
+  DEV_MODE: it hands an unauthenticated caller a heap dump and a 30s CPU stall.
+- **`gorm.Config.TranslateError` is on**, in production and in `testutil.NewDB`
+  alike. It is what turns a unique-index violation into `gorm.ErrDuplicatedKey`
+  so a service can answer 409 instead of 500. Turning it off silently converts
+  conflicts into server errors.
 
 ## Adding a Feature (TDD order)
 
@@ -177,7 +200,7 @@ Longer walkthroughs: `TESTING.md` (all four test harnesses),
   the MAC. The issue time is inside the signed material, so it cannot be edited
   to extend a captured token, and it is only read *after* the MAC verifies.
   Tokens expire after `CSRF_TOKEN_TTL` (default 12h) because a stateless token
-  cannot be revoked. Clients fetch one from `GET /api/csrf`.
+  cannot be revoked. Clients fetch one from `GET /api/v1/csrf`.
 - `DEV_MODE=true` substitutes throwaway secrets, drops the cookie `Secure` flag
   and keeps gin in debug mode. With it off, `Config.Validate` requires all three
   secrets, each at least 32 characters, with the two JWT secrets different.
@@ -189,23 +212,31 @@ runs inside `di.NewContainer` and reports every problem at once.
 
 ## Doc Accuracy
 
-`README.md`, `TESTING.md`, `AUTH.md` and `env.example` match the code.
-`internal/README.md` and the per-layer READMEs predate the error, logging and
-testing work and have drifted — treat `internal/api/router.go` and the code as
-the source of truth; those READMEs are useful for their worked examples only.
+`README.md`, `TESTING.md`, `AUTH.md`, `env.example`, `internal/README.md`, the
+per-layer READMEs (`internal/model`, `internal/repository`, `internal/service`)
+and `docs/openapi.yaml` all match the code.
 
-## Claude Code Hooks in This Repo
+The per-layer READMEs are the worked-example companions to this file, not
+duplicates of it: `internal/repository/README.md` for `dbtx.Conn`, the
+`TxManager` and the migration ledger; `internal/service/README.md` for the TDD
+loop, `apperr` classification and `WithinTx`; `internal/model/README.md` for
+DTOs, the response envelope and pagination.
 
-`.claude/settings.json` registers two hooks, and **both are broken**:
+The code is still the authority when they disagree: `internal/api/router.go` for
+routes, `internal/platform/migrate.go` for the schema, `internal/platform/config.go`
+for environment variables. Changing any of those three means updating the docs
+in the same commit — `docs/openapi.yaml` included, since nothing generates it.
 
-- `read_hook.js` (PreToolUse on Read/Grep) blocks reading any `.yaml` file
-  except `docs/openapi.yaml`, which does not exist. It now also blocks reading
-  `.golangci.yml`, `docker-compose.yml` and `.github/workflows/ci.yml`. Read
-  those with `cat` via Bash, or remove the hook.
-- `update-openapi-hook.sh` (PostToolUse on edits) execs
-  `.claude/scripts/update-openapi.sh`, which is not in the repo, and matches
-  paths (`controllers/`, `routers/`, `models/`, `services/`) that do not exist in
-  this layout. It fires on writes to `cmd/server/main.go` and fails.
+## Claude Code Configuration in This Repo
 
-Both are leftovers from the fullstack repo this was extracted from and are safe
-to delete.
+`.claude/settings.json` carries a permission allowlist and nothing else. The two
+hooks it used to register were leftovers from the fullstack repo this was
+extracted from and have been deleted: `read_hook.js` blocked reading every
+`.yaml` file except a `docs/openapi.yaml` that did not exist at the time, and
+`update-openapi-hook.sh` exec-ed a script that was never in the repo. There is
+no `.claude/hooks/` directory any more, and YAML files are read normally.
+
+`.claude/settings.local.json` is per-developer and gitignored. It used to be
+committed, carrying `yarn install` and `tsc` permissions from that same
+fullstack repo; if you need local overrides, create it and it will stay out of
+the history.
