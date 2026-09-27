@@ -38,7 +38,8 @@ func (s *csrfService) ValidateToken(token string) bool {
 		return false
 	}
 
-	age := s.now().Sub(time.Unix(int64(binary.BigEndian.Uint64(issuedAt)), 0))
+	// Undoes GenerateToken's int64 -> uint64 encoding bit for bit.
+	age := s.now().Sub(time.Unix(int64(binary.BigEndian.Uint64(issuedAt)), 0)) //nolint:gosec // G115: lossless round trip.
 
 	// A token from the future beyond the allowed skew is as suspect as an
 	// expired one.

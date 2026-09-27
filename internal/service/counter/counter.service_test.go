@@ -16,24 +16,18 @@ func TestNewCounterService(t *testing.T) {
 		expectNil bool
 	}{
 		{
-			name: "should create service with valid repository",
-			setupRepo: func(ctrl *gomock.Controller) *mock.MockCounterRepository {
-				return mock.NewMockCounterRepository(ctrl)
-			},
+			name:      "should create service with valid repository",
+			setupRepo: mock.NewMockCounterRepository,
 			expectNil: false,
 		},
 		{
-			name: "should return non-nil service instance",
-			setupRepo: func(ctrl *gomock.Controller) *mock.MockCounterRepository {
-				return mock.NewMockCounterRepository(ctrl)
-			},
+			name:      "should return non-nil service instance",
+			setupRepo: mock.NewMockCounterRepository,
 			expectNil: false,
 		},
 		{
-			name: "should initialize service properly",
-			setupRepo: func(ctrl *gomock.Controller) *mock.MockCounterRepository {
-				return mock.NewMockCounterRepository(ctrl)
-			},
+			name:      "should initialize service properly",
+			setupRepo: mock.NewMockCounterRepository,
 			expectNil: false,
 		},
 	}

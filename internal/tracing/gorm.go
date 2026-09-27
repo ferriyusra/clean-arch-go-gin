@@ -90,7 +90,7 @@ func endSpan(db *gorm.DB) {
 	defer span.End()
 
 	span.SetAttributes(
-		attribute.String("db.system", db.Dialector.Name()),
+		attribute.String("db.system", db.Name()),
 		// SQL only, never db.Statement.Vars: the parameters carry emails,
 		// refresh tokens and password hashes.
 		attribute.String("db.statement", db.Statement.SQL.String()),

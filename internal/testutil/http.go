@@ -49,7 +49,9 @@ func JSONRequest(t *testing.T, method, target string, body any) *http.Request {
 
 // WithCookie attaches a cookie to a request and returns it, so calls chain.
 func WithCookie(req *http.Request, name, value string) *http.Request {
-	req.AddCookie(&http.Cookie{Name: name, Value: value})
+	// A request's Cookie header carries only name=value; Secure, HttpOnly and
+	// SameSite are Set-Cookie attributes and are never sent back by a client.
+	req.AddCookie(&http.Cookie{Name: name, Value: value}) //nolint:gosec // G124: request cookie, attributes do not apply.
 	return req
 }
 

@@ -94,10 +94,8 @@ func TestGetMessageWithContext(t *testing.T) {
 		expectedError bool
 	}{
 		{
-			name: "should work with background context",
-			contextSetup: func() context.Context {
-				return context.Background()
-			},
+			name:         "should work with background context",
+			contextSetup: context.Background,
 			mockReturn: func() *string {
 				msg := "Hello, from the golang World!"
 				return &msg

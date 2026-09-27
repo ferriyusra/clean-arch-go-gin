@@ -37,6 +37,8 @@ import (
 
 // Dev-mode stand-ins. Config.Validate rejects these paths outright when
 // DEV_MODE is false, so they can never reach a real deployment.
+//
+//nolint:gosec // G101: deliberate, publicly known placeholders, never real credentials.
 const (
 	devAccessSecret  = "dev-access-secret-DO-NOT-USE-IN-PRODUCTION"
 	devRefreshSecret = "dev-refresh-secret-DO-NOT-USE-IN-PRODUCTION"

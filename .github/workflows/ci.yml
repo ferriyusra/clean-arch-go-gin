@@ -60,6 +60,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: golangci/golangci-lint-action@v6
+      # Two constraints keep these versions moving together. Action v6 refuses
+      # any golangci-lint v2, so the action must be v7 or later. And
+      # golangci-lint refuses a module whose `go` directive is newer than the Go
+      # it was built with, so the linter must be built with at least the Go
+      # that go.mod declares. v2.13 and later declare go 1.26 themselves, so
+      # their release binaries cannot have been built with anything older.
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.6.2
+          version: v2.14.0

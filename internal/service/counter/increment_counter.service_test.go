@@ -128,10 +128,8 @@ func TestIncrementCounterWithContext(t *testing.T) {
 		expectedError bool
 	}{
 		{
-			name: "should work with background context",
-			contextSetup: func() context.Context {
-				return context.Background()
-			},
+			name:          "should work with background context",
+			contextSetup:  context.Background,
 			mockReturn:    50,
 			mockError:     nil,
 			expectedValue: 50,
@@ -150,10 +148,8 @@ func TestIncrementCounterWithContext(t *testing.T) {
 			expectedError: true,
 		},
 		{
-			name: "should pass context to repository",
-			contextSetup: func() context.Context {
-				return context.Background()
-			},
+			name:          "should pass context to repository",
+			contextSetup:  context.Background,
 			mockReturn:    77,
 			mockError:     nil,
 			expectedValue: 77,
