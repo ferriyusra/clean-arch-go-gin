@@ -95,15 +95,27 @@ CI/CD lives outside `internal/` (full reference: `CI_CD.md`):
 result. The `Jenkinsfile` then builds, smoke-tests and pushes
 `ghcr.io/ferriyusra/clean-arch-go-gin`. Load-bearing details:
 
-- The image is gated by a `needs:` on a reusable-workflow call, not by
-  `workflow_run`. Only that shape gives Jenkins the real pushed SHA and ref,
-  and keeps fork PRs out without guard conditions.
+- The image job is gated by `needs: [build-and-test, lint]` in the same CI
+  run, via a reusable-workflow call, not by `workflow_run`. That way
+  `github.sha`/`github.ref` are the pushed commit and full ref. `workflow_run`
+  exposes the commit only as `head_sha` and the ref only as an ambiguous
+  `head_branch`, and it also fires for fork PRs. `needs:` does not keep PRs
+  out. The `image` job's `if: github.event_name == 'push'` and the main/`v*`
+  ref check in `jenkins.yml` do, so keep both.
+- The Jenkins credentials live in the GitHub environment `jenkins`, which
+  admits only `main` and `v*` tags, and `ci.yml` passes no secrets. A called
+  workflow never sees repository-level secrets, so moving them there silently
+  breaks the trigger. `JENKINS_URL` is a variable: as a secret, it would be
+  masked and every Jenkins link in the log would read `***`.
 - Every `sh` step in the Jenkinsfile is single-quoted and reads parameters and
   secrets from the environment. Never switch one to a `"..."` GString: that
   turns a crafted `GIT_REF` into shell and puts tokens in process arguments.
-- Jenkins re-validates `GIT_SHA`/`GIT_REF` and refuses commits that are not on
-  `origin/main` or not what the tag points at. Floating tags (`main`, `X.Y`,
-  `latest`) only ever move forward.
+- Jenkins re-validates `GIT_SHA`/`GIT_REF`. It refuses a main build not on
+  `origin/main`, and a tag build that the tag does not point at or that is on
+  neither `origin/main` nor `origin/release/*`. It prunes stale tags, because
+  the workspace is reused. Floating tags (`main`, `X.Y`, `latest`) only ever
+  move forward, and `queue: max` in `jenkins.yml` gives every commit its own
+  build.
 - The smoke test runs the image with `DEV_MODE` off, a read-only root
   filesystem and `DATABASE_DSN=/tmp/smoke.db`. A config change that adds a
   required variable, or writes outside `/tmp`, fails the image build until the

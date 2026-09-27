@@ -81,14 +81,11 @@ jobs:
           version: v2.14.0
 
   # Pushes to main and v* tags hand the tested commit to Jenkins, which builds
-  # and publishes the image. Pull requests stop at the checks above: they get
-  # no secrets, and an unmerged commit must never reach the registry.
+  # and publishes the image. The `if` is what keeps pull requests out, because
+  # `needs:` alone would run this after a PR's checks too, so keep it. The Jenkins
+  # credentials come from the `jenkins` environment inside the called workflow;
+  # nothing is passed from here.
   image:
     needs: [build-and-test, lint]
     if: github.event_name == 'push'
     uses: ./.github/workflows/jenkins.yml
-    # Passed by name, not `inherit`: this job needs three secrets, not all of them.
-    secrets:
-      JENKINS_URL: ${{ secrets.JENKINS_URL }}
-      JENKINS_USER: ${{ secrets.JENKINS_USER }}
-      JENKINS_API_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}

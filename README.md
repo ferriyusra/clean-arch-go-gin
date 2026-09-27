@@ -342,10 +342,10 @@ rather than on message strings.
 
 ## CI/CD
 
-GitHub Actions runs the checks on every push and pull request. When a push to
-`main` or a `v*` release tag passes them, it hands the tested commit to
-Jenkins. Jenkins builds the image, smoke-tests it and pushes it to
-`ghcr.io/ferriyusra/clean-arch-go-gin`:
+GitHub Actions runs the checks on every pull request, and on pushes to `main`
+and `v*` tags. When a push to `main` or a `v*` release tag passes them, the
+tested commit goes to Jenkins. Jenkins builds the image, smoke-tests it and
+pushes it to `ghcr.io/ferriyusra/clean-arch-go-gin`:
 
 ```
 push → GitHub Actions (tests, lint) → Jenkins (build, smoke test) → ghcr.io
@@ -354,10 +354,13 @@ push → GitHub Actions (tests, lint) → Jenkins (build, smoke test) → ghcr.i
 | Ref | Image tags |
 |---|---|
 | `main` | `sha-<commit>`, and `main` while that commit is still the tip |
-| `v1.2.3` | `sha-<commit>`, `1.2.3`, `1.2`, `latest` (the last two only for the newest release) |
+| `v1.2.3` | `sha-<commit>`, `1.2.3`, plus `1.2` if it is the newest `v1.2.x` and `latest` if it is the newest release overall |
+| `v1.2.3-rc.1` | `sha-<commit>` and `1.2.3-rc.1` only |
 
-Pull requests are tested but never reach the registry. **[CI_CD.md](CI_CD.md)**
-covers the one-time Jenkins, GitHub and GHCR setup, releasing, re-running and
+Pull requests are tested but never reach the registry. A release tag is built
+only if its commit is on `main` or a `release/*` branch.
+**[CI_CD.md](CI_CD.md)** covers the one-time setup (protected refs, the GHCR
+token, Jenkins and the `jenkins` environment), releasing, re-running and
 troubleshooting.
 
 ## Database Schema

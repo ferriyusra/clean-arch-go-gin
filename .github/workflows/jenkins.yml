@@ -3,9 +3,12 @@
 #
 # This file runs no tests of its own. ci.yml calls it as a reusable workflow
 # once build-and-test and lint have passed on a push. That call is what gates
-# the image on CI, and it also means github.sha and github.ref here are the
-# pushed commit and ref. The alternative, a workflow_run trigger, sees only the
-# default branch's HEAD and cannot tell a tag from a branch with the same name.
+# the image on CI, and it gives this workflow the pushed commit and the full
+# ref (refs/heads/main, refs/tags/v1.2.3) as github.sha and github.ref. A
+# workflow_run trigger was rejected. Its github.sha/github.ref are the default
+# branch's. The tested commit is only in github.event.workflow_run.head_sha,
+# and the ref only as a bare head_branch, which cannot tell a tag from a branch
+# with the same name. It also fires for fork pull requests.
 #
 # workflow_dispatch is for re-sending a commit whose CI run is too old to
 # re-run, for example after Jenkins was down. It does NOT run CI first, so only
@@ -15,16 +18,6 @@ name: Jenkins image
 
 on:
   workflow_call:
-    secrets:
-      JENKINS_URL:
-        description: Jenkins root URL, e.g. https://jenkins.example.com
-        required: true
-      JENKINS_USER:
-        description: Jenkins user whose API token starts the build
-        required: true
-      JENKINS_API_TOKEN:
-        description: API token of JENKINS_USER
-        required: true
   workflow_dispatch:
 
 # The job only reads the one script it runs. Everything that can push an image
@@ -38,16 +31,26 @@ jobs:
     # main and release tags only, including under workflow_dispatch, where any
     # branch can be picked in the UI. Jenkins re-checks the same rule.
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    # The Jenkins credentials live in this environment, not in repository
+    # secrets. Its deployment rules admit only main and v* tags. A repository
+    # secret is readable by a workflow on any branch a collaborator pushes;
+    # an environment secret is not. Environment secrets also reach a called
+    # workflow directly, so ci.yml passes nothing.
+    environment: jenkins
     runs-on: ubuntu-latest
     # Jenkins aborts its own build after 30 minutes; the rest is queue time.
     timeout-minutes: 45
-    # One build per ref at a time. A newer push to main replaces a pending one
-    # rather than queueing behind it. Jenkins also refuses to move :main to a
-    # commit that is no longer the tip, because concurrency cannot stop CI runs
-    # from finishing out of order.
+    # Builds of one ref run one at a time, in the order they reach the group.
+    # `queue: max` keeps every pending build. The default keeps only the last
+    # arrival and cancels the rest, so an older commit whose CI finished late
+    # would replace the newest one, and :main would then stay behind with no
+    # build left to fix it. Order does not matter for correctness: Jenkins
+    # moves :main only to the current tip, and :X.Y/:latest only to the newest
+    # release.
     concurrency:
       group: jenkins-image-${{ github.ref }}
       cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@v7
         with:
@@ -56,10 +59,13 @@ jobs:
 
       - name: Trigger Jenkins and wait for the result
         env:
-          JENKINS_URL: ${{ secrets.JENKINS_URL }}
+          # The URL is a variable, not a secret. The runner masks secrets
+          # everywhere, so a secret URL would turn every Jenkins link in the
+          # log and job summary into "***".
+          JENKINS_URL: ${{ vars.JENKINS_URL }}
+          JENKINS_JOB: ${{ vars.JENKINS_JOB || 'clean-arch-go-gin/image' }}
           JENKINS_USER: ${{ secrets.JENKINS_USER }}
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
-          JENKINS_JOB: ${{ vars.JENKINS_JOB || 'clean-arch-go-gin' }}
           GIT_SHA: ${{ github.sha }}
           GIT_REF: ${{ github.ref }}
           SOURCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

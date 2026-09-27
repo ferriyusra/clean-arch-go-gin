@@ -36,6 +36,9 @@ pipeline {
         IMAGE = 'ghcr.io/ferriyusra/clean-arch-go-gin'
         GHCR_CREDENTIALS_ID = 'ghcr-credentials'
         CURL_IMAGE = 'curlimages/curl:8.22.0'
+        // Forces BuildKit, so a build never silently falls back to the
+        // deprecated legacy builder. The agent therefore needs the buildx
+        // plugin: with it missing, docker 23+ fails outright.
         DOCKER_BUILDKIT = '1'
     }
 
@@ -90,19 +93,29 @@ pipeline {
                         // The job reads this Jenkinsfile from main, but builds
                         // exactly the commit CI tested. Tags are fetched (the
                         // git plugin's default) so the tag checks and
-                        // `git describe` below can see them.
+                        // `git describe` below can see them. The workspace is
+                        // reused between builds, so stale tags and branches are
+                        // pruned. Otherwise a tag deleted on GitHub would still
+                        // pass the checks below and still count as the newest
+                        // release.
                         checkout([$class: 'GitSCM',
                             branches: [[name: params.GIT_SHA]],
                             userRemoteConfigs: scm.userRemoteConfigs,
                             extensions: [
                                 [$class: 'CleanBeforeCheckout'],
                                 [$class: 'CloneOption', noTags: false, shallow: false, depth: 0, reference: '', timeout: 10],
+                                [$class: 'PruneStaleBranch'],
+                                [$class: 'PruneStaleTag', pruneTags: true],
                             ],
                         ])
                         // Anyone who can start this job could pass any SHA, so
-                        // the ref is checked against the repository itself:
-                        // only commits on main, or the commit a release tag
-                        // points at, are ever published.
+                        // the ref is checked against the repository itself. A
+                        // main build must be on origin/main. A tag build must
+                        // be what the tag points at, and on main or on a
+                        // release/* branch, where hotfixes for older lines
+                        // live. An unmerged commit therefore cannot be published
+                        // by tagging it, provided main and release/* are
+                        // protected branches (CI_CD.md, "Protect the refs").
                         sh '''
                             set -eu
                             head=$(git rev-parse HEAD)
@@ -124,6 +137,10 @@ pipeline {
                                         echo "Tag $tag points at '${tagged:-nothing}', not $GIT_SHA; refusing to publish" >&2
                                         exit 1
                                     fi
+                                    if ! git branch --remotes --contains "$GIT_SHA" --format='%(refname:short)' | grep -E -q '^origin/(main|release/.+)$'; then
+                                        echo "$GIT_SHA is on neither origin/main nor an origin/release/* branch; refusing to publish $tag" >&2
+                                        exit 1
+                                    fi
                                     ;;
                             esac
                         '''
@@ -143,9 +160,13 @@ pipeline {
                         // .git is excluded from the build context, so the
                         // version arrives as a build arg. --pull makes every
                         // build start from the current, patched base images.
+                        // --load puts the result in the daemon's image store
+                        // even when the default buildx builder is not the
+                        // docker driver, because the smoke test and push need
+                        // it there.
                         sh '''
                             set -eu
-                            docker build --pull \
+                            docker build --pull --load \
                                 --build-arg VERSION="$VERSION" \
                                 --label org.opencontainers.image.revision="$GIT_SHA" \
                                 --label org.opencontainers.image.created="$CREATED" \
@@ -239,9 +260,17 @@ pipeline {
                             // The login goes to a per-build DOCKER_CONFIG, not the
                             // agent user's ~/.docker, so the token does not
                             // outlive this build or leak to other jobs on the agent.
+                            // An empty config dir also drops the CLI's current
+                            // context, so the daemon endpoint is pinned first.
+                            // Without that, an agent on a non-default context
+                            // (rootless, ssh://) would push from the wrong daemon.
                             //
-                            // Every build pushes the immutable sha-<short> tag.
-                            // The floating tags only ever move forward:
+                            // Every build pushes sha-<short>. It always names a
+                            // build of that commit, but a rebuild, or a release
+                            // tag on a commit main already built, re-pushes it
+                            // with a new digest. Pin the printed digest when an
+                            // exact image matters. The floating tags only move
+                            // forward:
                             //   :main   only if this commit is still main's tip,
                             //           since CI runs can finish out of order;
                             //   :X.Y    only for the newest release in X.Y;
@@ -249,6 +278,8 @@ pipeline {
                             // A pre-release gets its exact tag and nothing else.
                             sh '''
                                 set -eu
+                                DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}"
+                                export DOCKER_HOST
                                 export DOCKER_CONFIG="${WORKSPACE_TMP:-$WORKSPACE@tmp}/docker-ghcr"
                                 mkdir -p "$DOCKER_CONFIG"
                                 printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin

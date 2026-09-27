@@ -4,9 +4,9 @@
 # it also runs from a laptop, which is the quickest way to test the credentials:
 #
 #   JENKINS_URL=https://jenkins.example.com JENKINS_USER=gha-trigger \
-#   JENKINS_API_TOKEN=... JENKINS_JOB=clean-arch-go-gin \
+#   JENKINS_API_TOKEN=... JENKINS_JOB=clean-arch-go-gin/image \
 #   GIT_SHA=$(git rev-parse origin/main) GIT_REF=refs/heads/main \
-#   .github/scripts/trigger-jenkins.sh
+#   bash .github/scripts/trigger-jenkins.sh
 #
 # Needs bash, curl and jq. See CI_CD.md for the Jenkins side.
 set -euo pipefail
@@ -85,8 +85,24 @@ past_deadline() { (( $(date +%s) >= deadline )); }
 build_number=""
 while [[ -z "$build_number" ]]; do
   past_deadline && { echo "::error::Timed out waiting for Jenkins to start the build (queue item $queue_id)"; exit 1; }
-  item=$(jenkins --fail "$base/queue/item/$queue_id/api/json?tree=cancelled,why,executable%5Bnumber%5D") \
-    || { echo "::error::Could not read queue item $queue_id. Jenkins forgets an item 5 minutes after it leaves the queue."; exit 1; }
+  # Only answers a retry cannot change end the wait. A restart or a proxy
+  # hiccup gets the same tolerance as the build poll below. `|| code=000` keeps
+  # a connection failure from tripping set -e.
+  code=$(jenkins --output "$work/item" --write-out '%{http_code}' \
+    "$base/queue/item/$queue_id/api/json?tree=cancelled,why,executable%5Bnumber%5D") || code=000
+  case "$code" in
+    200) item=$(<"$work/item") ;;
+    404)
+      echo "::error::Jenkins no longer knows queue item $queue_id. It forgets an item 5 minutes after the item leaves the queue, and on restart; check the job's recent builds."
+      exit 1 ;;
+    401|403)
+      echo "::error::Jenkins refused the credentials ($code) while polling queue item $queue_id. The user needs Job/Read as well as Job/Build."
+      exit 1 ;;
+    *)
+      echo "Queue poll failed ($code); retrying"
+      sleep "$POLL_SECONDS"
+      continue ;;
+  esac
   if [[ "$(jq -r '.cancelled // false' <<<"$item")" == "true" ]]; then
     echo "::error::The queued build was cancelled in Jenkins"; exit 1
   fi
