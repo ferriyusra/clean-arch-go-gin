@@ -166,8 +166,10 @@ verify-mocks: mocks
 	@git diff --exit-code -- $(REPO_MOCK_DIR) $(SERVICE_MOCK_DIR) \
 		|| (echo "Generated mocks are out of date; run 'make mocks'" && exit 1)
 
+# .git is excluded from the build context, so the image cannot work out its own
+# version. Without the build arg the binary reports the Dockerfile's fallback.
 docker-build:
-	docker build -t clean-arch-go-gin:$(VERSION) .
+	docker build --build-arg VERSION=$(VERSION) -t clean-arch-go-gin:$(VERSION) .
 
 docker-up:
 	docker compose up --build

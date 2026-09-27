@@ -21,6 +21,24 @@ updates:
           - "minor"
           - "patch"
 
+  # Base images drift like any other dependency: golang:1.25-alpine silently
+  # fell behind go.mod's `go` line and broke the image build. Tags that are not
+  # versions, like distroless's `nonroot`, are beyond what this can bump.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker)"
+    groups:
+      docker-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

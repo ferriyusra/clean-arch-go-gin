@@ -23,7 +23,18 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/server ./cmd/server
 
 # ---- runtime stage ---------------------------------------------------------
-FROM gcr.io/distroless/static-debian12:nonroot
+# Debian 13. The distroless project stopped updating the debian12 tags, and a
+# base that no longer gets patches is worse than no base at all.
+FROM gcr.io/distroless/static-debian13:nonroot
+
+# `source` is what links a package pushed to ghcr.io back to this repository.
+# Without it, GHCR does not link a command-line push to anything. The revision
+# and creation time are CI facts, so CI adds them with --label.
+ARG VERSION=docker
+LABEL org.opencontainers.image.source="https://github.com/ferriyusra/clean-arch-go-gin" \
+      org.opencontainers.image.description="Clean Architecture Go API built with Gin and GORM" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}"
 
 WORKDIR /app
 COPY --from=builder /out/server /app/server

@@ -12,12 +12,19 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      # setup-go reads go.mod's `toolchain` line when there is one, and only
+      # falls back to the `go` line otherwise. The `go` line is a minimum for
+      # consumers of the module. Building with it exactly would ship the .0
+      # standard library and miss every security fix in the later patches.
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Show Go version
+        run: go version
 
       - name: Check formatting
         run: |
@@ -55,8 +62,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true

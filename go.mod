@@ -2,6 +2,8 @@ module github.com/ferriyusra/clean-arch-go-gin
 
 go 1.26.0
 
+toolchain go1.26.8
+
 require (
 	github.com/gin-contrib/cors v1.7.6
 	github.com/gin-gonic/gin v1.12.0
