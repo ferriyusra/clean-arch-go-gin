@@ -14,3 +14,5 @@ docker-compose.yml
 README.md
 AUTH.md
 CLAUDE.md
+Jenkinsfile
+CI_CD.md

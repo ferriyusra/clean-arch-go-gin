@@ -1,0 +1,66 @@
+# Hands a tested commit to Jenkins, which builds the container image,
+# smoke-tests it and pushes it to ghcr.io (see the Jenkinsfile and CI_CD.md).
+#
+# This file runs no tests of its own. ci.yml calls it as a reusable workflow
+# once build-and-test and lint have passed on a push. That call is what gates
+# the image on CI, and it also means github.sha and github.ref here are the
+# pushed commit and ref. The alternative, a workflow_run trigger, sees only the
+# default branch's HEAD and cannot tell a tag from a branch with the same name.
+#
+# workflow_dispatch is for re-sending a commit whose CI run is too old to
+# re-run, for example after Jenkins was down. It does NOT run CI first, so only
+# dispatch a ref whose CI is green. For a recent failure, "Re-run failed jobs"
+# on the CI run is the better button.
+name: Jenkins image
+
+on:
+  workflow_call:
+    secrets:
+      JENKINS_URL:
+        description: Jenkins root URL, e.g. https://jenkins.example.com
+        required: true
+      JENKINS_USER:
+        description: Jenkins user whose API token starts the build
+        required: true
+      JENKINS_API_TOKEN:
+        description: API token of JENKINS_USER
+        required: true
+  workflow_dispatch:
+
+# The job only reads the one script it runs. Everything that can push an image
+# lives in Jenkins, so this token cannot publish anything.
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    name: Build and push image (Jenkins)
+    # main and release tags only, including under workflow_dispatch, where any
+    # branch can be picked in the UI. Jenkins re-checks the same rule.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # Jenkins aborts its own build after 30 minutes; the rest is queue time.
+    timeout-minutes: 45
+    # One build per ref at a time. A newer push to main replaces a pending one
+    # rather than queueing behind it. Jenkins also refuses to move :main to a
+    # commit that is no longer the tip, because concurrency cannot stop CI runs
+    # from finishing out of order.
+    concurrency:
+      group: jenkins-image-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Trigger Jenkins and wait for the result
+        env:
+          JENKINS_URL: ${{ secrets.JENKINS_URL }}
+          JENKINS_USER: ${{ secrets.JENKINS_USER }}
+          JENKINS_API_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
+          JENKINS_JOB: ${{ vars.JENKINS_JOB || 'clean-arch-go-gin' }}
+          GIT_SHA: ${{ github.sha }}
+          GIT_REF: ${{ github.ref }}
+          SOURCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/trigger-jenkins.sh

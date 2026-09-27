@@ -88,6 +88,27 @@ Clean Architecture, dependencies point inward only:
   `PPROF_ENABLED`.
 - **testutil/**: shared test harness (assertions, in-memory DB, HTTP helpers).
 
+CI/CD lives outside `internal/` (full reference: `CI_CD.md`):
+`.github/workflows/ci.yml` tests. On a push to `main` or a `v*` tag, its
+`image` job calls `.github/workflows/jenkins.yml`, which runs
+`.github/scripts/trigger-jenkins.sh` to start the Jenkins job and wait for the
+result. The `Jenkinsfile` then builds, smoke-tests and pushes
+`ghcr.io/ferriyusra/clean-arch-go-gin`. Load-bearing details:
+
+- The image is gated by a `needs:` on a reusable-workflow call, not by
+  `workflow_run`. Only that shape gives Jenkins the real pushed SHA and ref,
+  and keeps fork PRs out without guard conditions.
+- Every `sh` step in the Jenkinsfile is single-quoted and reads parameters and
+  secrets from the environment. Never switch one to a `"..."` GString: that
+  turns a crafted `GIT_REF` into shell and puts tokens in process arguments.
+- Jenkins re-validates `GIT_SHA`/`GIT_REF` and refuses commits that are not on
+  `origin/main` or not what the tag points at. Floating tags (`main`, `X.Y`,
+  `latest`) only ever move forward.
+- The smoke test runs the image with `DEV_MODE` off, a read-only root
+  filesystem and `DATABASE_DSN=/tmp/smoke.db`. A config change that adds a
+  required variable, or writes outside `/tmp`, fails the image build until the
+  Jenkinsfile passes it.
+
 Entry point: `cmd/server/main.go` → godotenv → `platform.NewConfig()` →
 `logging.New()` → `di.NewContainer()` → `http.Server`, shut down on
 SIGINT/SIGTERM with `cfg.Server.ShutdownTimeout` and `container.Close()`.
@@ -233,9 +254,11 @@ runs inside `di.NewContainer` and reports every problem at once.
 
 ## Doc Accuracy
 
-`README.md`, `TESTING.md`, `AUTH.md`, `env.example`, `internal/README.md`, the
-per-layer READMEs (`internal/model`, `internal/repository`, `internal/service`)
-and `docs/openapi.yaml` all match the code.
+`README.md`, `TESTING.md`, `AUTH.md`, `CI_CD.md`, `env.example`,
+`internal/README.md`, the per-layer READMEs (`internal/model`,
+`internal/repository`, `internal/service`) and `docs/openapi.yaml` all match
+the code. `CI_CD.md` is the one to update alongside any change to the
+`Jenkinsfile`, `.github/workflows/`, `.github/scripts/` or the `Dockerfile`.
 
 The per-layer READMEs are the worked-example companions to this file, not
 duplicates of it: `internal/repository/README.md` for `dbtx.Conn`, the

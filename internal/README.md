@@ -6,8 +6,9 @@ separation of concerns.
 
 This is the tour of the `internal/` tree with a full worked example. The root
 [README.md](../README.md) is the short version, [CLAUDE.md](../CLAUDE.md) the
-checklist, [TESTING.md](../TESTING.md) the test harnesses and
-[AUTH.md](../AUTH.md) the auth reference.
+checklist, [TESTING.md](../TESTING.md) the test harnesses,
+[AUTH.md](../AUTH.md) the auth reference and [CI_CD.md](../CI_CD.md) the
+build pipeline.
 
 ## 📚 Quick Navigation
 
@@ -738,6 +739,24 @@ make build
 Produces `./bin/server-$GOOS-$GOARCH` (`.exe` on Windows), built with
 `CGO_ENABLED=0 -trimpath` and a version stamp in `-ldflags`.
 
+### Container image
+
+Released images are not built by hand. When CI passes on a push to `main` or a
+`v*` tag, Jenkins builds the `Dockerfile`, smoke-tests the result and pushes it
+to `ghcr.io/ferriyusra/clean-arch-go-gin`. The tags are `sha-<commit>`,
+`main`, and for releases `X.Y.Z`, `X.Y` and `latest`.
+[CI_CD.md](../CI_CD.md) has the setup and the tag rules.
+
+```bash
+docker pull ghcr.io/ferriyusra/clean-arch-go-gin:1.2.3
+make docker-build        # a local image, stamped with git describe
+```
+
+The image is a static binary on `distroless/static-debian13:nonroot`, running
+as uid 65532 with no shell. The smoke test runs it on a read-only root
+filesystem. Only a sqlite file needs a writable path, and production uses
+postgres, which needs none.
+
 ### Environment
 
 ```env
@@ -923,6 +942,7 @@ make mocks     # then commit the result; CI runs make verify-mocks
 - [Repository Layer Guide](./repository/README.md) — GORM, `dbtx`, migrations
 - [TESTING.md](../TESTING.md) — all four harnesses
 - [AUTH.md](../AUTH.md) — the auth reference
+- [CI_CD.md](../CI_CD.md) — GitHub Actions → Jenkins → GHCR
 - [Clean Architecture by Uncle Bob](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html)
 
 ---

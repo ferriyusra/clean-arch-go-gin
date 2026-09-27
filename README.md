@@ -50,7 +50,7 @@ make fmt vet          # format, vet
 make mocks            # regenerate repository + service mocks
 make verify-mocks     # fail if the generated mocks are stale
 make docker-up        # app + postgres via docker compose
-make ci               # everything CI runs, locally
+make ci               # CI's test checks, locally (lint: make lint; images: CI_CD.md)
 make clean            # remove build artifacts
 ```
 
@@ -339,6 +339,26 @@ make test
 **[TESTING.md](TESTING.md) is the full guide** — how each harness works, the
 traps in the in-memory sqlite setup, and why the suite asserts on error sentinels
 rather than on message strings.
+
+## CI/CD
+
+GitHub Actions runs the checks on every push and pull request. When a push to
+`main` or a `v*` release tag passes them, it hands the tested commit to
+Jenkins. Jenkins builds the image, smoke-tests it and pushes it to
+`ghcr.io/ferriyusra/clean-arch-go-gin`:
+
+```
+push → GitHub Actions (tests, lint) → Jenkins (build, smoke test) → ghcr.io
+```
+
+| Ref | Image tags |
+|---|---|
+| `main` | `sha-<commit>`, and `main` while that commit is still the tip |
+| `v1.2.3` | `sha-<commit>`, `1.2.3`, `1.2`, `latest` (the last two only for the newest release) |
+
+Pull requests are tested but never reach the registry. **[CI_CD.md](CI_CD.md)**
+covers the one-time Jenkins, GitHub and GHCR setup, releasing, re-running and
+troubleshooting.
 
 ## Database Schema
 
