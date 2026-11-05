@@ -74,8 +74,8 @@ jobs:
       # any golangci-lint v2, so the action must be v7 or later. And
       # golangci-lint refuses a module whose `go` directive is newer than the Go
       # it was built with, so the linter must be built with at least the Go
-      # that go.mod declares. v2.13 and later declare go 1.26 themselves, so
-      # their release binaries cannot have been built with anything older.
+      # that go.mod declares. go1.27 support arrived in v2.13.0, and the v2.14.0
+      # release binaries are built with Go 1.27.0, so they accept go 1.27.0.
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.14.0

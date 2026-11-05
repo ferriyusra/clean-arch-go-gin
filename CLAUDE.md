@@ -41,10 +41,12 @@ Environment gotchas on this machine:
 - Makefile recipes are POSIX shell — run them from Git Bash/WSL, not cmd/PowerShell.
 - `mockgen` and `air` are declared in `go.mod` under the `tool` directive, so
   `go tool mockgen` and `go tool air` work with no global install.
-- `go.mod` pins `toolchain go1.26.8`, so the local go1.26.1 downloads and runs
-  go1.26.8 on first use (`GOTOOLCHAIN=auto`). CI's `setup-go` and the
-  govulncheck job read the same line. When bumping it, keep
-  `golang:1.26-alpine` in the `Dockerfile` on the same minor.
+- `go.mod` declares `go 1.27.0` and pins `toolchain go1.27.3`, so an older
+  local Go downloads and runs go1.27.3 on first use (`GOTOOLCHAIN=auto`). CI's
+  `setup-go` and the govulncheck job read the same line. When bumping it, keep
+  `golang:1.27-alpine` in the `Dockerfile` on the same minor, and check that
+  the golangci-lint version in `ci.yml` was built with at least the Go on the
+  `go` line.
 
 ## Architecture
 

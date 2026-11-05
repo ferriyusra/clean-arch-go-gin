@@ -114,9 +114,9 @@ Three cross-cutting concerns deliberately do **not** appear as a layer:
 
 ### Prerequisites
 
-- **Go 1.26+** (check with `go version`). `go.mod` declares `go 1.26.0` as the
-  minimum and pins `toolchain go1.26.8` as the one to build with. Under the
-  default `GOTOOLCHAIN=auto`, an older 1.26.x downloads the pinned toolchain on
+- **Go 1.27+** (check with `go version`). `go.mod` declares `go 1.27.0` as the
+  minimum and pins `toolchain go1.27.3` as the one to build with. Under the
+  default `GOTOOLCHAIN=auto`, an older Go downloads the pinned toolchain on
   first use.
 - **Make** for build automation — on Windows run the recipes from Git Bash or
   WSL, since they are POSIX shell

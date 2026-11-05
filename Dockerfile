@@ -4,7 +4,7 @@
 # The minor version must be at least go.mod's `go` directive. The official
 # golang images set GOTOOLCHAIN=local, so an older toolchain refuses the module
 # outright instead of downloading a newer one.
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 WORKDIR /src
 
