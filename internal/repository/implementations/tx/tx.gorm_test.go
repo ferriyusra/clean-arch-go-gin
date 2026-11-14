@@ -171,3 +171,67 @@ func TestRepositoriesWorkWithoutATransaction(t *testing.T) {
 		t.Fatalf("expected to find the user written outside a transaction")
 	}
 }
+
+// TestChangePasswordRollsBackWhenTheReissueFails is the atomicity proof for the
+// password change, made against a real transaction.
+//
+// The service tests cannot make it: they wire testutil.PassthroughTx, which
+// runs the closure with no transaction at all, so they can only show that an
+// error propagates — not that the password write was undone. Since the whole
+// argument for wrapping the change is "a state where the password has changed
+// but the old sessions survive must not exist", that state deserves a test
+// against a database that can actually roll back.
+//
+// The failure is injected the way it would really happen: the reissued refresh
+// token collides with a digest already in the table.
+func TestChangePasswordRollsBackWhenTheReissueFails(t *testing.T) {
+	db := testutil.NewDB(t)
+	manager := txRepo.NewGORMTxManager(db)
+	users := userRepo.NewGORMUserRepository(db)
+	tokens := refreshRepo.NewGORMRefreshTokenRepository(db)
+	ctx := context.Background()
+
+	user := newUser("rollback-pw@example.com")
+	originalPassword := user.Password
+	userID, err := users.Create(ctx, user)
+	testutil.NoError(t, err)
+
+	// A live session, plus an occupied digest for the reissue to collide with.
+	testutil.NoError(t, tokens.Create(ctx, entity.RefreshTokenEntity{
+		ID: uuid.New(), UserID: *userID,
+		TokenHash: "original-session", ExpiresAt: time.Now().Add(time.Hour),
+	}))
+	testutil.NoError(t, tokens.Create(ctx, entity.RefreshTokenEntity{
+		ID: uuid.New(), UserID: uuid.New(),
+		TokenHash: "collides", ExpiresAt: time.Now().Add(time.Hour),
+	}))
+
+	// The same three steps ChangePassword performs, in the same order.
+	txErr := manager.WithinTx(ctx, func(ctx context.Context) error {
+		if updateErr := users.Update(ctx, *userID, entity.UserEntity{
+			Password: []byte("a-brand-new-hash"),
+		}); updateErr != nil {
+			return updateErr
+		}
+		if revokeErr := tokens.DeleteByUserID(ctx, *userID); revokeErr != nil {
+			return revokeErr
+		}
+		return tokens.Create(ctx, entity.RefreshTokenEntity{
+			ID: uuid.New(), UserID: *userID,
+			TokenHash: "collides", ExpiresAt: time.Now().Add(time.Hour),
+		})
+	})
+	testutil.Error(t, txErr, "the reissue collides, so the unit of work fails")
+
+	// The password must be the old one. If it were not, the user would be
+	// holding a password that works nowhere.
+	stored, err := users.FindByID(ctx, *userID)
+	testutil.NoError(t, err)
+	testutil.DeepEqual(t, stored.Password, originalPassword, "the password change was rolled back")
+
+	// And the session must be back: a revocation that survives a failed change
+	// would sign the user out for nothing.
+	total, err := tokens.CountActiveByUserID(ctx, *userID, time.Now())
+	testutil.NoError(t, err)
+	testutil.Equal(t, total, int64(1), "the original session was restored by the rollback")
+}

@@ -166,8 +166,11 @@ func NewConfig() *Config {
 		Observability: ObservabilityConfig{
 			MetricsEnabled: getEnvBool("METRICS_ENABLED", false),
 			PprofEnabled:   getEnvBool("PPROF_ENABLED", false),
-			AdminHost:      getEnv("ADMIN_HOST", "127.0.0.1"),
-			AdminPort:      getEnvInt("ADMIN_PORT", 9090),
+			// Bracketed IPv6 ("[::1]") is unwrapped here rather than at the
+			// listener, because net.JoinHostPort adds its own brackets and would
+			// otherwise produce "[[::1]]:9090", which net.Listen rejects.
+			AdminHost: strings.Trim(getEnv("ADMIN_HOST", "127.0.0.1"), "[]"),
+			AdminPort: getEnvInt("ADMIN_PORT", 9090),
 		},
 		Tracing: TracingConfig{
 			Enabled:        getEnvBool("OTEL_ENABLED", false),

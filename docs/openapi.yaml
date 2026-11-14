@@ -1650,8 +1650,10 @@ components:
         payload, which is unusual for this API: the failed checks are the
         diagnostic, so they are returned rather than dropped.
 
-        It also carries no `requestId` or `traceId` — the readiness handler
-        writes this body directly instead of going through the shared error path.
+        It carries `requestId` and `traceId` like any other error response, even
+        though the handler writes it directly rather than through the shared
+        error path: a failing readiness probe is exactly when someone needs to
+        find the matching log line and trace.
       type: object
       required: [success, message, data]
       properties:
@@ -1663,6 +1665,14 @@ components:
           examples: ["1 dependency checks failed"]
         data:
           $ref: "#/components/schemas/HealthStatus"
+        requestId:
+          type: string
+          description: Correlates this response with its server-side log line.
+          examples: ["0af7651916cd43dd8448eb211c80319c"]
+        traceId:
+          type: string
+          description: Present when tracing is enabled.
+          examples: ["0af7651916cd43dd8448eb211c80319c"]
       additionalProperties: false
 
     EmptyEnvelope:

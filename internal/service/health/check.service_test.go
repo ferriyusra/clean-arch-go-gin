@@ -16,19 +16,15 @@ func TestCheck(t *testing.T) {
 		expectedError   bool
 	}{
 		{
-			name: "should return ok status on successful check",
-			contextSetup: func() context.Context {
-				return context.Background()
-			},
+			name:            "should return ok status on successful check",
+			contextSetup:    context.Background,
 			expectedStatus:  "ok",
 			expectedMessage: "Service is healthy",
 			expectedError:   false,
 		},
 		{
-			name: "should include timestamp in details",
-			contextSetup: func() context.Context {
-				return context.Background()
-			},
+			name:            "should include timestamp in details",
+			contextSetup:    context.Background,
 			expectedStatus:  "ok",
 			expectedMessage: "Service is healthy",
 			expectedError:   false,

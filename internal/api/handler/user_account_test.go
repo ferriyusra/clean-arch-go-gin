@@ -216,16 +216,19 @@ func TestListSessionsRejectsAnUnusableWindow(t *testing.T) {
 	}
 }
 
-// TestListSessionsNeverLeaksTheTokenDigest is the security test for this
-// endpoint. The stored SHA-256 digest is the only thing standing between a
-// leaked database row and a replayable refresh token, so it must not reach a
-// response body — not in full and not truncated. A comment on the struct would
-// not survive someone adding a "device fingerprint" field; this will.
-func TestListSessionsNeverLeaksTheTokenDigest(t *testing.T) {
+// TestListSessionsSerialisesOnlyTheSafeSessionFields checks the handler's
+// half of the contract: that it serialises what the service hands it and adds
+// nothing, and that no field is named for a credential.
+//
+// It is NOT the leak test, and it cannot be. The service is mocked here, so the
+// digest never enters the system under test — asserting that an invented
+// constant is absent from a body it was never put into is an assertion that
+// cannot fail. The real leak test needs real rows, and lives in
+// internal/di: TestListSessionsEndToEnd reads the digests the database actually
+// holds and asserts none of them appears in the response.
+func TestListSessionsSerialisesOnlyTheSafeSessionFields(t *testing.T) {
 	f := newAccountFixture(t)
 	userID := uuid.New()
-
-	const digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 
 	f.users.EXPECT().ListSessions(gomock.Any(), userID, gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, _ uuid.UUID, _ string, _ request.Pagination) (*response.SessionList, error) {
@@ -245,13 +248,14 @@ func TestListSessionsNeverLeaksTheTokenDigest(t *testing.T) {
 	rec := testutil.Do(f.engine, f.authed(t, http.MethodGet, "/api/v1/auth/sessions", nil, userID))
 	testutil.Equal(t, rec.Code, http.StatusOK, "status")
 
-	body := rec.Body.String()
-	testutil.True(t, !strings.Contains(body, digest), "the digest is absent from the body")
-	// Not even a prefix: eight characters of a hex digest is still eight
-	// characters an attacker no longer has to guess.
-	testutil.True(t, !strings.Contains(body, digest[:8]), "no prefix of the digest either")
-	testutil.True(t, !strings.Contains(strings.ToLower(body), "hash"), "no field named for the digest")
-	testutil.True(t, !strings.Contains(strings.ToLower(body), "token"), "no token-shaped field at all")
+	body := strings.ToLower(rec.Body.String())
+	testutil.True(t, !strings.Contains(body, "hash"), "no field named for the digest")
+	testutil.True(t, !strings.Contains(body, "token"), "no token-shaped field at all")
+
+	// What the handler must actually emit.
+	for _, field := range []string{"id", "current", "createdat", "expiresat"} {
+		testutil.True(t, strings.Contains(body, field), "the body carries "+field)
+	}
 }
 
 func TestChangePasswordHandler(t *testing.T) {

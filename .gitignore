@@ -13,6 +13,7 @@ logs
 
 # Coverage
 coverage.out
+coverage.check.out
 coverage.html
 
 # Editor directories and files

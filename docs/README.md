@@ -37,7 +37,10 @@ Two warnings are expected and are not defects:
   server entry is the point.
 - `no-unused-components` on `MethodNotAllowed`. A `405` is the answer to a
   method that has *no* operation, so no operation can reference it; it is
-  defined anyway so clients know the shape.
+  defined anyway so clients know the shape. The status really is emitted:
+  `newRouter` sets `r.HandleMethodNotAllowed = true`, which gin leaves off by
+  default and without which the `NoMethod` handler is dead code and a wrong
+  verb answers `404`.
 
 Do **not** use `npx @apidevtools/swagger-cli validate` on this file. That
 package is abandoned and ships a broken OpenAPI 3.1 meta-schema that rejects a

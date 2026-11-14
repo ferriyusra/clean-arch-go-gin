@@ -114,7 +114,7 @@ func TestDatabaseSpansNeverCarryQueryVariables(t *testing.T) {
 	var checkedStatement bool
 	for _, span := range exporter.GetSpans() {
 		for _, attr := range span.Attributes {
-			value := attr.Value.Emit()
+			value := attr.Value.String()
 
 			if strings.Contains(value, secretEmail) {
 				t.Errorf("span %q attribute %q leaked a query variable: %s",

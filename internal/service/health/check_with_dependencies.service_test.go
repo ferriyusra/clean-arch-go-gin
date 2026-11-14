@@ -153,10 +153,8 @@ func TestCheckWithDependenciesWithContext(t *testing.T) {
 		expectedError  bool
 	}{
 		{
-			name: "should work with background context",
-			contextSetup: func() context.Context {
-				return context.Background()
-			},
+			name:         "should work with background context",
+			contextSetup: context.Background,
 			checks: map[string]func(context.Context) error{
 				"database": func(ctx context.Context) error {
 					return nil

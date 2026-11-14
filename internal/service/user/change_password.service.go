@@ -43,10 +43,13 @@ func (s *userService) ChangePassword(
 
 	// A valid access token for an account that no longer exists (deleted, or
 	// deleted between issuing the token and using it) gets the same answer as a
-	// wrong password. Saying "no such user" here would turn a protected
-	// endpoint into an account-existence oracle for anyone holding a stale
-	// token, and the client's next move is the same either way: sign in again.
+	// wrong password, and costs the same time. Returning here without the bcrypt
+	// call would make a missing account answer in microseconds where a wrong
+	// password takes ~60ms, which is the difference Login already pays to hide.
+	//
+	// The client's next move is the same either way: sign in again.
 	if user == nil {
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(req.CurrentPassword))
 		return nil, apperr.ErrInvalidCredentials
 	}
 

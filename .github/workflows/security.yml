@@ -27,5 +27,11 @@ jobs:
       - name: Run govulncheck
         uses: golang/govulncheck-action@v1
         with:
+          # govulncheck judges the standard library by the Go that runs it, so
+          # this has to be the Go we build with. The action defaults
+          # go-version-input to "stable", and setup-go prefers go-version over
+          # go-version-file when it gets both. Blanking it makes go.mod's
+          # `toolchain` line the one that counts.
+          go-version-input: ""
           go-version-file: go.mod
           go-package: ./...

@@ -32,6 +32,33 @@ import (
 // values and could mint an unbounded number of time series.
 const RouteUnmatched = "unmatched"
 
+// MethodOther labels a request whose HTTP method is not one of the standard
+// verbs.
+//
+// This closes the same hole RouteUnmatched closes, on the other label. net/http
+// only checks that a method is a valid HTTP *token*, not that it is a verb
+// anyone has heard of, so `curl -X SLURP` reaches the router, falls through to
+// the no-route handler and would otherwise mint a brand new time series. The
+// token grammar allows arbitrary length, so an unauthenticated caller could
+// mint them without limit and take the Prometheus server down. promhttp
+// sanitises its own method label the same way.
+const MethodOther = "other"
+
+// standardMethods is the whitelist. Anything outside it becomes MethodOther.
+var standardMethods = map[string]struct{}{
+	http.MethodGet: {}, http.MethodHead: {}, http.MethodPost: {},
+	http.MethodPut: {}, http.MethodPatch: {}, http.MethodDelete: {},
+	http.MethodConnect: {}, http.MethodOptions: {}, http.MethodTrace: {},
+}
+
+// sanitizeMethod bounds the method label to a fixed set of values.
+func sanitizeMethod(method string) string {
+	if _, ok := standardMethods[method]; ok {
+		return method
+	}
+	return MethodOther
+}
+
 // Metrics owns a Prometheus registry and the instruments recorded by the gin
 // middleware.
 //
@@ -127,7 +154,7 @@ func (m *Metrics) Middleware() gin.HandlerFunc {
 			route = RouteUnmatched
 		}
 
-		method := c.Request.Method
+		method := sanitizeMethod(c.Request.Method)
 		elapsed := time.Since(start).Seconds()
 
 		m.requests.WithLabelValues(method, route, strconv.Itoa(c.Writer.Status())).Inc()

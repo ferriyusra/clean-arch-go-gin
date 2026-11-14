@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"github.com/ferriyusra/clean-arch-go-gin/internal/api/middleware"
+	"github.com/ferriyusra/clean-arch-go-gin/internal/model/entity"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/model/response"
 	"github.com/ferriyusra/clean-arch-go-gin/internal/testutil"
 )
@@ -43,7 +45,9 @@ func signedIn(t *testing.T, engine *gin.Engine, email, password string) (accessT
 // returns, so it is where "the digest never leaves the database" is worth
 // asserting on an actual response body.
 func TestListSessionsEndToEnd(t *testing.T) {
-	engine := newTestContainer(t).Router
+	container := newTestContainer(t)
+	engine := container.Router
+	db := container.Config.Database.Gorm
 
 	const email, password = "sessions@example.com", "password123"
 	firstAccess, firstRefresh := registered(t, engine, email, password)
@@ -80,8 +84,15 @@ func TestListSessionsEndToEnd(t *testing.T) {
 	}
 	testutil.Equal(t, envelope.Meta.Total, int64(2), "meta total")
 
-	// The real digests are in the database at this point. None of them, and
-	// nothing shaped like a token, is in the response.
+	// The security assertion, made against the REAL digests rather than against
+	// field names. Searching the body for "hash" and "token" only catches a
+	// badly named field; it would sail past someone adding
+	// `Fingerprint string` carrying row.TokenHash. Reading the actual stored
+	// values and asserting none of them appears is the assertion that holds
+	// whatever the field ends up being called.
+	assertNoStoredDigestInBody(t, db, rec.Body.String())
+
+	// Field names are still worth checking, as a second, weaker net.
 	body := strings.ToLower(rec.Body.String())
 	testutil.True(t, !strings.Contains(body, "hash"), "no digest field in the body")
 	testutil.True(t, !strings.Contains(body, "token"), "no token field in the body")
@@ -331,4 +342,35 @@ func TestHealthRoutesStayUnversioned(t *testing.T) {
 	testutil.Equal(t, testutil.Do(engine,
 		testutil.JSONRequest(t, http.MethodGet, "/api/v1/health", nil)).Code,
 		http.StatusNotFound, "no versioned health endpoint")
+}
+
+// assertNoStoredDigestInBody reads every refresh-token digest the database
+// actually holds and fails if any of them, or any prefix long enough to matter,
+// appears in the response body.
+//
+// This is the shape a leak test has to take. A test that searches for a
+// constant it invented itself, or for a field *name*, cannot fail when the leak
+// is real — which is exactly how the first version of this assertion passed
+// while proving nothing.
+func assertNoStoredDigestInBody(t *testing.T, db *gorm.DB, body string) {
+	t.Helper()
+
+	var digests []string
+	if err := db.Model(&entity.RefreshTokenEntity{}).Pluck("token_hash", &digests).Error; err != nil {
+		t.Fatalf("reading stored digests: %v", err)
+	}
+	if len(digests) == 0 {
+		t.Fatal("no digests stored, so this assertion would prove nothing")
+	}
+
+	for _, digest := range digests {
+		if strings.Contains(body, digest) {
+			t.Errorf("a stored refresh-token digest appears in the response body")
+		}
+		// Not even a prefix: eight hex characters is eight an attacker no
+		// longer has to guess.
+		if strings.Contains(body, digest[:8]) {
+			t.Errorf("a stored digest's prefix %q appears in the response body", digest[:8])
+		}
+	}
 }

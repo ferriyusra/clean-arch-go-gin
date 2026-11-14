@@ -53,8 +53,10 @@ func run() error {
 		return fmt.Errorf("initializing application: %w", err)
 	}
 	defer func() {
+		// Close joins the admin listener, the tracer flush and the database, so
+		// the message must not name just one of them.
 		if closeErr := container.Close(); closeErr != nil {
-			logger.Error("closing database", "error", closeErr)
+			logger.Error("releasing resources on shutdown", "error", closeErr)
 		}
 	}()
 

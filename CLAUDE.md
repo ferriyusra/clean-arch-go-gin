@@ -9,15 +9,16 @@ make dev               # Start server with hot-reload (air via `go tool`, DEV_MO
 make server            # Run server directly (DEV_MODE=true)
 make build             # Build ./bin/server-$GOOS-$GOARCH (-trimpath, -ldflags version stamp)
 make test              # go test -cover ./...            (no cgo needed)
-make test-race         # CGO_ENABLED=1 go test -race ./...
+make test-race         # CGO_ENABLED=1 go test -race -cover ./... (needs gcc)
 make test-coverage     # coverage.out + coverage.html, with -coverpkg=./...
+make coverage-check    # Fail if coverage.out < COVERAGE_MIN, mocks excluded (CI runs this)
 make lint              # golangci-lint run ./...
 make mocks             # Regenerate BOTH repository and service mocks
 make verify-mocks      # Fail if generated mocks are stale (CI runs this)
 make vuln              # govulncheck over ./... (via go run, no global install)
 make bench             # go test -bench . -benchmem ./...
 make fuzz              # Short fuzz pass: make fuzz PKG=./internal/service/csrf FUZZ=FuzzValidate
-make ci                # tidy-check + vet + verify-mocks + test-race
+make ci                # tidy-check + vet + verify-mocks + test-race + coverage floor
 make clean             # Remove ./bin, coverage files, test cache
 ```
 
@@ -41,6 +42,12 @@ Environment gotchas on this machine:
 - Makefile recipes are POSIX shell — run them from Git Bash/WSL, not cmd/PowerShell.
 - `mockgen` and `air` are declared in `go.mod` under the `tool` directive, so
   `go tool mockgen` and `go tool air` work with no global install.
+- `go.mod` declares `go 1.27.0` and pins `toolchain go1.27.4`, so an older
+  local Go downloads and runs go1.27.4 on first use (`GOTOOLCHAIN=auto`). CI's
+  `setup-go` and the govulncheck job read the same line. When bumping it, keep
+  `golang:1.27-alpine` in the `Dockerfile` on the same minor, and check that
+  the golangci-lint version in `ci.yml` was built with at least the Go on the
+  `go` line.
 
 ## Architecture
 
@@ -84,6 +91,39 @@ Clean Architecture, dependencies point inward only:
   `PPROF_ENABLED`.
 - **testutil/**: shared test harness (assertions, in-memory DB, HTTP helpers).
 
+CI/CD lives outside `internal/` (full reference: `CI_CD.md`):
+`.github/workflows/ci.yml` tests. On a push to `main` or a `v*` tag, its
+`image` job calls `.github/workflows/jenkins.yml`, which runs
+`.github/scripts/trigger-jenkins.sh` to start the Jenkins job and wait for the
+result. The `Jenkinsfile` then builds, smoke-tests and pushes
+`ghcr.io/ferriyusra/clean-arch-go-gin`. Load-bearing details:
+
+- The image job is gated by `needs: [build-and-test, lint]` in the same CI
+  run, via a reusable-workflow call, not by `workflow_run`. That way
+  `github.sha`/`github.ref` are the pushed commit and full ref. `workflow_run`
+  exposes the commit only as `head_sha` and the ref only as an ambiguous
+  `head_branch`, and it also fires for fork PRs. `needs:` does not keep PRs
+  out. The `image` job's `if: github.event_name == 'push'` and the main/`v*`
+  ref check in `jenkins.yml` do, so keep both.
+- The Jenkins credentials live in the GitHub environment `jenkins`, which
+  admits only `main` and `v*` tags, and `ci.yml` passes no secrets. A called
+  workflow never sees repository-level secrets, so moving them there silently
+  breaks the trigger. `JENKINS_URL` is a variable: as a secret, it would be
+  masked and every Jenkins link in the log would read `***`.
+- Every `sh` step in the Jenkinsfile is single-quoted and reads parameters and
+  secrets from the environment. Never switch one to a `"..."` GString: that
+  turns a crafted `GIT_REF` into shell and puts tokens in process arguments.
+- Jenkins re-validates `GIT_SHA`/`GIT_REF`. It refuses a main build not on
+  `origin/main`, and a tag build that the tag does not point at or that is on
+  neither `origin/main` nor `origin/release/*`. It prunes stale tags, because
+  the workspace is reused. Floating tags (`main`, `X.Y`, `latest`) only ever
+  move forward, and `queue: max` in `jenkins.yml` gives every commit its own
+  build.
+- The smoke test runs the image with `DEV_MODE` off, a read-only root
+  filesystem and `DATABASE_DSN=/tmp/smoke.db`. A config change that adds a
+  required variable, or writes outside `/tmp`, fails the image build until the
+  Jenkinsfile passes it.
+
 Entry point: `cmd/server/main.go` → godotenv → `platform.NewConfig()` →
 `logging.New()` → `di.NewContainer()` → `http.Server`, shut down on
 SIGINT/SIGTERM with `cfg.Server.ShutdownTimeout` and `container.Close()`.
@@ -102,12 +142,16 @@ Cross-cutting facts that are not visible from a single file:
   the `context.Context` and repositories pick it up through `dbtx.Conn(ctx,
   r.db)`, so no repository signature mentions it. Nested calls reuse the outer
   transaction rather than opening a second one, which sqlite would block on.
-  `Register` and `Refresh` both rely on this.
+  Four call sites rely on it: `Register`, `Refresh`, `ChangePassword` and
+  `DeleteAccount`. A single-statement write is not wrapped — it is already
+  atomic and the transaction would only buy a round trip.
 - **The container can reuse an injected DB**: it only calls
   `platform.InitializeDatabase` when `cfg.Database.Gorm` is nil, and
   `Container.Close()` then leaves that injected handle alone. Tests rely on this.
-- **Every service method starts with a `select { case <-ctx.Done(): ... }` guard**,
-  and every service has a test that cancels the context.
+- **Service methods that do real work start with a `select { case <-ctx.Done(): ... }`
+  guard.** Thin pass-throughs such as `counter.GetCounter` and `message.GetMessage`
+  leave it out and rely on the repository's own guard. Either way every service
+  has a test that cancels the context — that part has no exceptions.
 - **The logger travels in `context.Context`**, never in constructor arguments:
   `middleware.RequestID` puts a request-scoped `*slog.Logger` there and any layer
   reads it with `logging.FromContext(ctx)`.
@@ -132,6 +176,19 @@ Cross-cutting facts that are not visible from a single file:
   listener, built in `di.NewContainer` and started by `Container.StartAdmin`.
   `Config.Validate` refuses to bind pprof to a non-loopback address outside
   DEV_MODE: it hands an unauthenticated caller a heap dump and a 30s CPU stall.
+- **The metrics middleware sits OUTSIDE `Recovery`, and the order is load-bearing.**
+  A panic unwinds through every `c.Next()` above it, and the middleware records
+  after its own `c.Next()` with no `defer` — so from inside `Recovery` a
+  panicked request is counted zero times. A `defer` would not fix it either: it
+  runs during unwinding, before `Recovery` writes the 500, and would record 200.
+  `TestPanickedRequestsAreCounted` pins this.
+- **Both metric labels are bounded.** `route` uses `c.FullPath()` with
+  `"unmatched"` as the fallback, and `method` is whitelisted to the standard
+  verbs with `"other"` for the rest — `net/http` accepts any HTTP token as a
+  method, so without that an anonymous caller mints unbounded time series.
+- **`r.HandleMethodNotAllowed = true`** in `newRouter`. gin leaves it off, which
+  makes `SetupFallbacks`' `NoMethod` handler dead code and answers a wrong verb
+  with 404 — telling a client the path does not exist when only the verb is wrong.
 - **`gorm.Config.TranslateError` is on**, in production and in `testutil.NewDB`
   alike. It is what turns a unique-index violation into `gorm.ErrDuplicatedKey`
   so a service can answer 409 instead of 500. Turning it off silently converts
@@ -212,9 +269,11 @@ runs inside `di.NewContainer` and reports every problem at once.
 
 ## Doc Accuracy
 
-`README.md`, `TESTING.md`, `AUTH.md`, `env.example`, `internal/README.md`, the
-per-layer READMEs (`internal/model`, `internal/repository`, `internal/service`)
-and `docs/openapi.yaml` all match the code.
+`README.md`, `TESTING.md`, `AUTH.md`, `CI_CD.md`, `env.example`,
+`internal/README.md`, the per-layer READMEs (`internal/model`,
+`internal/repository`, `internal/service`) and `docs/openapi.yaml` all match
+the code. `CI_CD.md` is the one to update alongside any change to the
+`Jenkinsfile`, `.github/workflows/`, `.github/scripts/` or the `Dockerfile`.
 
 The per-layer READMEs are the worked-example companions to this file, not
 duplicates of it: `internal/repository/README.md` for `dbtx.Conn`, the

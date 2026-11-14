@@ -1,0 +1,8 @@
+# actionlint (v1.7.12 at the time of writing) does not know `concurrency.queue`
+# yet, which GitHub added in May 2026 (rhysd/actionlint#657). jenkins.yml
+# relies on `queue: max`; see the comment there. Remove this once actionlint
+# accepts the key.
+paths:
+  .github/workflows/jenkins.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

@@ -42,6 +42,7 @@ make build            # build a stripped, version-stamped binary
 make test             # all tests; works without a C toolchain
 make test-race        # all tests with -race (needs CGO_ENABLED=1 + gcc/clang)
 make test-coverage    # writes coverage.out and coverage.html
+make coverage-check   # fail if coverage.out is under COVERAGE_MIN (mocks excluded)
 make bench            # benchmarks only, with -benchmem
 make fuzz             # one fuzz target: PKG=... FUZZ=... FUZZTIME=30s
 make vuln             # govulncheck, pulled on demand
@@ -50,7 +51,7 @@ make fmt vet          # format, vet
 make mocks            # regenerate repository + service mocks
 make verify-mocks     # fail if the generated mocks are stale
 make docker-up        # app + postgres via docker compose
-make ci               # everything CI runs, locally
+make ci               # CI's test checks, locally (lint: make lint; images: CI_CD.md)
 make clean            # remove build artifacts
 ```
 
@@ -339,6 +340,29 @@ make test
 **[TESTING.md](TESTING.md) is the full guide** — how each harness works, the
 traps in the in-memory sqlite setup, and why the suite asserts on error sentinels
 rather than on message strings.
+
+## CI/CD
+
+GitHub Actions runs the checks on every pull request, and on pushes to `main`
+and `v*` tags. When a push to `main` or a `v*` release tag passes them, the
+tested commit goes to Jenkins. Jenkins builds the image, smoke-tests it and
+pushes it to `ghcr.io/ferriyusra/clean-arch-go-gin`:
+
+```
+push → GitHub Actions (tests, lint) → Jenkins (build, smoke test) → ghcr.io
+```
+
+| Ref | Image tags |
+|---|---|
+| `main` | `sha-<commit>`, and `main` while that commit is still the tip |
+| `v1.2.3` | `sha-<commit>`, `1.2.3`, plus `1.2` if it is the newest `v1.2.x` and `latest` if it is the newest release overall |
+| `v1.2.3-rc.1` | `sha-<commit>` and `1.2.3-rc.1` only |
+
+Pull requests are tested but never reach the registry. A release tag is built
+only if its commit is on `main` or a `release/*` branch.
+**[CI_CD.md](CI_CD.md)** covers the one-time setup (protected refs, the GHCR
+token, Jenkins and the `jenkins` environment), releasing, re-running and
+troubleshooting.
 
 ## Database Schema
 

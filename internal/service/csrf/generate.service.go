@@ -23,7 +23,10 @@ func (s *csrfService) GenerateToken() (string, error) {
 	}
 
 	issuedAt := make([]byte, 8)
-	binary.BigEndian.PutUint64(issuedAt, uint64(s.now().Unix()))
+	// The uint64 is only the wire encoding. ValidateToken converts it straight
+	// back to int64, and that round trip preserves every bit, so no value can
+	// overflow on the way.
+	binary.BigEndian.PutUint64(issuedAt, uint64(s.now().Unix())) //nolint:gosec // G115: lossless round trip, see above.
 
 	return hex.EncodeToString(nonce) + "." +
 		hex.EncodeToString(issuedAt) + "." +

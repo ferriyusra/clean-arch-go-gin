@@ -133,7 +133,7 @@ func TestGenerateAccessTokenClaimsExpiry(t *testing.T) {
 	})
 
 	now := time.Now()
-	if claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(now) {
+	if claims.ExpiresAt == nil || claims.ExpiresAt.Before(now) {
 		t.Errorf("token already expired")
 	}
 	if claims.IssuedAt != nil {

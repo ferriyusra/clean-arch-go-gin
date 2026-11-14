@@ -30,9 +30,16 @@ PKG      ?= ./internal/service/csrf
 FUZZ     ?= Fuzz
 FUZZTIME ?= 30s
 
+# The floor `coverage-check` enforces, as a percentage of statements across the
+# module minus the generated mocks. It sits just under the total it was set
+# against (82.5%), so a change that lands code without tests turns CI red.
+# Raise it as coverage climbs. Lowering it is a review decision, not a way to
+# get a build green.
+COVERAGE_MIN ?= 81
+
 .PHONY: help install-deps dev server build test test-verbose test-race test-coverage \
-        bench fuzz vuln lint fmt vet tidy-check mocks repository-mocks service-mocks \
-        verify-mocks docker-build docker-up docker-down clean ci
+        coverage-check bench fuzz vuln lint fmt vet tidy-check mocks repository-mocks \
+        service-mocks verify-mocks docker-build docker-up docker-down clean ci
 
 help:
 	@echo "Available commands:"
@@ -43,6 +50,7 @@ help:
 	@echo "  make test           - Run all tests (works without a C toolchain)"
 	@echo "  make test-race      - Run all tests with the race detector (needs CGO + gcc/clang)"
 	@echo "  make test-coverage  - Run tests and write coverage.html"
+	@echo "  make coverage-check - Fail if coverage.out is below COVERAGE_MIN (default $(COVERAGE_MIN)%)"
 	@echo "  make bench          - Run every benchmark with allocation counts"
 	@echo "  make fuzz           - Fuzz one target: make fuzz PKG=./internal/service/csrf FUZZ=FuzzValidate FUZZTIME=30s"
 	@echo "  make vuln           - Scan dependencies with govulncheck"
@@ -87,6 +95,23 @@ test-coverage:
 	go test -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 	@go tool cover -func=coverage.out | tail -1
+
+# Reads an existing coverage.out and runs no tests, so CI can check the profile
+# its race run already wrote. The generated mocks are dropped first: mockgen
+# -typed emits Return/Do/DoAndReturn for every method, and most of them are
+# never called. Counting them would make each new repository or service lower
+# the total even when its real code is fully tested.
+coverage-check:
+	@[ -f coverage.out ] || { echo "coverage.out not found; run 'make test-coverage' first"; exit 1; }
+	@grep -v -e '/internal/repository/mock/' -e '/internal/service/mock/' coverage.out > coverage.check.out
+	@total=$$(go tool cover -func=coverage.check.out | awk '/^total:/ { sub(/%/, "", $$NF); print $$NF }'); \
+	[ -n "$$total" ] || { echo "Could not read a total from coverage.out"; exit 1; }; \
+	if awk -v t="$$total" -v m="$(COVERAGE_MIN)" 'BEGIN { exit !(t + 0 < m + 0) }'; then \
+		echo "Coverage $$total% is below the $(COVERAGE_MIN)% floor (generated mocks excluded)."; \
+		echo "Add tests for the code this change introduces. See TESTING.md before lowering COVERAGE_MIN."; \
+		exit 1; \
+	fi; \
+	echo "Coverage $$total% meets the $(COVERAGE_MIN)% floor (generated mocks excluded)."
 
 # -run '^$$' keeps the unit tests out of the timing numbers; -benchmem is what
 # makes an allocation regression visible. A package with no benchmarks simply
@@ -166,8 +191,10 @@ verify-mocks: mocks
 	@git diff --exit-code -- $(REPO_MOCK_DIR) $(SERVICE_MOCK_DIR) \
 		|| (echo "Generated mocks are out of date; run 'make mocks'" && exit 1)
 
+# .git is excluded from the build context, so the image cannot work out its own
+# version. Without the build arg the binary reports the Dockerfile's fallback.
 docker-build:
-	docker build -t clean-arch-go-gin:$(VERSION) .
+	docker build --build-arg VERSION=$(VERSION) -t clean-arch-go-gin:$(VERSION) .
 
 docker-up:
 	docker compose up --build
@@ -175,9 +202,11 @@ docker-up:
 docker-down:
 	docker compose down -v
 
-ci: tidy-check vet verify-mocks test-race
+# CI gets the profile from its race run. Locally test-race writes none, so the
+# coverage run is separate; it costs one more pass over the tests.
+ci: tidy-check vet verify-mocks test-race test-coverage coverage-check
 
 clean:
 	rm -rf ./bin
-	rm -f coverage.out coverage.html
+	rm -f coverage.out coverage.check.out coverage.html
 	go clean -testcache
