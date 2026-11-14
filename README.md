@@ -231,7 +231,7 @@ log line per request, no duplicates.
   the span in Jaeger or Tempo all share one identifier.
 
 ```bash
-docker compose --profile tracing up   # Jaeger at http://localhost:16686
+OTEL_ENABLED=true docker compose --profile tracing up   # Jaeger at http://localhost:16686
 OTEL_ENABLED=true OTEL_TRACES_EXPORTER=console make server   # or just print spans
 ```
 
