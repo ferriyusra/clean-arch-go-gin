@@ -613,6 +613,7 @@ make test           # go test -cover ./...      (no cgo needed)
 make test-verbose   # -v -failfast
 make test-race      # needs CGO_ENABLED=1 and a C compiler
 make test-coverage  # coverage.out + coverage.html
+make coverage-check # fails if coverage.out is under COVERAGE_MIN (mocks excluded)
 make bench          # benchmarks only, with -benchmem
 make fuzz           # one fuzz target: PKG=... FUZZ=... FUZZTIME=30s
 make vuln           # govulncheck, pulled on demand

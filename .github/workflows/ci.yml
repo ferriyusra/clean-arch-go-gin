@@ -59,8 +59,11 @@ jobs:
       - name: Test with race detector
         run: CGO_ENABLED=1 go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 
-      - name: Coverage summary
-        run: go tool cover -func=coverage.out | tail -1
+      # Fails the job when total coverage, generated mocks excluded, falls under
+      # COVERAGE_MIN in the Makefile. It reads the profile the step above wrote
+      # and runs no tests of its own.
+      - name: Coverage floor
+        run: make coverage-check
 
   lint:
     runs-on: ubuntu-latest

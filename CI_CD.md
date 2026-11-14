@@ -11,6 +11,7 @@ the service pulls from there.
         ▼
  GitHub Actions ─ ci.yml ─────────────────────────────────────────────┐
    build-and-test   gofmt · go mod tidy · vet · build · mocks · -race │
+                    coverage floor                                    │
    lint             golangci-lint                                     │
         │ both green, and the event is a push to main or a v* tag     │
         ▼                                                             │
@@ -50,7 +51,7 @@ registry, and its job summary links to the Jenkins build.
 
 | File | Runs on | Job |
 |---|---|---|
-| `.github/workflows/ci.yml` | GitHub: pushes to `main`, `v*` tags, every PR | Tests and lint. On a push, also calls `jenkins.yml` once both pass |
+| `.github/workflows/ci.yml` | GitHub: pushes to `main`, `v*` tags, every PR | Tests, the coverage floor and lint. On a push, also calls `jenkins.yml` once both jobs pass |
 | `.github/workflows/jenkins.yml` | GitHub: called by `ci.yml`, or started by hand | Sends the tested commit to Jenkins and waits for the result |
 | `.github/scripts/trigger-jenkins.sh` | Inside `jenkins.yml`, or on your laptop | The Jenkins API calls: queue the build, follow it, report the result |
 | `Jenkinsfile` | Jenkins | Builds, smoke-tests and pushes the image |
@@ -446,6 +447,7 @@ and the per-build Docker config, whatever the outcome.
 | Symptom | Cause and fix |
 |---|---|
 | Every Actions job fails in seconds with no steps | Actions is not running for the account at all, often a billing or spending-limit lock. The job annotation says why. Fix it under *Settings → Billing* |
+| `build-and-test`, step *Coverage floor*: `Coverage …% is below the …% floor` | The change added code that no test runs. `make test-coverage coverage-check` reproduces it locally, and `coverage.html` shows the uncovered lines in red. Add tests. Lower `COVERAGE_MIN` in the `Makefile` only as a decision made in review; see [TESTING.md](TESTING.md#coverage-floor) |
 | `image` job: `JENKINS_URL is not set`, or `JENKINS_USER is not set` | The value is missing from the `jenkins` **environment**. Repository-level secrets and variables do not reach the called workflow. See [GitHub setup](#4-github) |
 | `image` job fails with `… is not allowed to deploy to jenkins due to environment protection rules` | The ref is not in the environment's deployment rules. Add `main` and the tag `v*` |
 | `Jenkins answered 400 … is not parameterized` | The job has never run. Click **Build Now** once ([First run](#3-jenkins)) |

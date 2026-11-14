@@ -19,6 +19,7 @@ Shared helpers live in [`internal/testutil`](internal/testutil).
 make test            # everything; works without a C toolchain
 make test-race       # adds -race; needs CGO_ENABLED=1 and gcc/clang
 make test-coverage   # writes coverage.out and coverage.html
+make coverage-check  # fails if coverage.out is under COVERAGE_MIN
 go test -run TestLogin ./internal/service/user/   # a single test
 ```
 
@@ -26,6 +27,24 @@ go test -run TestLogin ./internal/service/user/   # a single test
 compiler, which many Windows installations do not have, and a default target
 that fails on a fresh clone trains people to ignore it. CI runs `-race` on Linux,
 where it is free.
+
+### Coverage floor
+
+`make coverage-check` reads `coverage.out` and fails when the total is under
+`COVERAGE_MIN` in the `Makefile`, currently 81%. CI runs it on the profile its
+race run writes, so a pull request that adds code without tests goes red.
+Locally, run `make test-coverage coverage-check`.
+
+- **The generated mocks are left out.** `mockgen -typed` emits `Return`, `Do`
+  and `DoAndReturn` for every method, and most of them are never called.
+  Counting them would make each new repository or service lower the total even
+  when its real code is fully tested.
+- **The total is module-wide.** The profile is built with `-coverpkg=./...`, so
+  code that one package's tests exercise in another package counts. It will
+  not match the per-package numbers that `make test` prints.
+- **The floor only moves up on its own.** When coverage climbs, raise
+  `COVERAGE_MIN` in the same commit. Lowering it is a decision to make in
+  review, not a way to get a build green.
 
 ## Assertions
 

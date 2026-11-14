@@ -11,13 +11,14 @@ make build             # Build ./bin/server-$GOOS-$GOARCH (-trimpath, -ldflags v
 make test              # go test -cover ./...            (no cgo needed)
 make test-race         # CGO_ENABLED=1 go test -race -cover ./... (needs gcc)
 make test-coverage     # coverage.out + coverage.html, with -coverpkg=./...
+make coverage-check    # Fail if coverage.out < COVERAGE_MIN, mocks excluded (CI runs this)
 make lint              # golangci-lint run ./...
 make mocks             # Regenerate BOTH repository and service mocks
 make verify-mocks      # Fail if generated mocks are stale (CI runs this)
 make vuln              # govulncheck over ./... (via go run, no global install)
 make bench             # go test -bench . -benchmem ./...
 make fuzz              # Short fuzz pass: make fuzz PKG=./internal/service/csrf FUZZ=FuzzValidate
-make ci                # tidy-check + vet + verify-mocks + test-race
+make ci                # tidy-check + vet + verify-mocks + test-race + coverage floor
 make clean             # Remove ./bin, coverage files, test cache
 ```
 

@@ -42,6 +42,7 @@ make build            # build a stripped, version-stamped binary
 make test             # all tests; works without a C toolchain
 make test-race        # all tests with -race (needs CGO_ENABLED=1 + gcc/clang)
 make test-coverage    # writes coverage.out and coverage.html
+make coverage-check   # fail if coverage.out is under COVERAGE_MIN (mocks excluded)
 make bench            # benchmarks only, with -benchmem
 make fuzz             # one fuzz target: PKG=... FUZZ=... FUZZTIME=30s
 make vuln             # govulncheck, pulled on demand
