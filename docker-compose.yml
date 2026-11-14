@@ -43,12 +43,22 @@ services:
       METRICS_ENABLED: "true"
       ADMIN_HOST: "0.0.0.0"
       ADMIN_PORT: "9090"
+      # Tracing is off unless you ask for it, because with no collector running
+      # the exporter would log an error for every batch it fails to send. Turn
+      # it on together with the jaeger service below:
+      #   OTEL_ENABLED=true docker compose --profile tracing up
+      # The endpoint names the jaeger service. The default, localhost:4318,
+      # would point at this container, not at Jaeger.
+      OTEL_ENABLED: "${OTEL_ENABLED:-false}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
     ports:
       - "8080:8080"
       - "9090:9090"
 
-  # Local trace viewer. Start it with: docker compose --profile tracing up
-  # Then open http://localhost:16686 and set OTEL_ENABLED=true on the app.
+  # Local trace viewer. Start it, with tracing on in the app, using:
+  #   OTEL_ENABLED=true docker compose --profile tracing up
+  # Then open http://localhost:16686. Port 4318 is published as well, so an
+  # app run outside compose (`OTEL_ENABLED=true make dev`) can send to it too.
   jaeger:
     image: jaegertracing/all-in-one:1.62
     profiles: [tracing]

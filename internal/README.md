@@ -804,7 +804,7 @@ admin listener, flushes the tracer and closes the database.
 
 ```bash
 make docker-up                          # app + postgres
-docker compose --profile tracing up     # also Jaeger, at http://localhost:16686
+OTEL_ENABLED=true docker compose --profile tracing up   # also Jaeger, at http://localhost:16686, with tracing on
 ```
 
 **Systemd**
